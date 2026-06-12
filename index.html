@@ -500,10 +500,12 @@
         }
 
         function parseCSVText(text) {
-            const lines = text.trim().split('\n').filter(l => l.trim());
-            if (lines.length < 2) return [];
-            // PapaParse로 파싱
-            const result = Papa.parse(text, { header: true, skipEmptyLines: true });
+            const result = Papa.parse(text, {
+                header: true,
+                skipEmptyLines: 'greedy',
+                quoteChar: '"',
+                newline: '\n'
+            });
             return result.data || [];
         }
 
@@ -598,6 +600,8 @@
                     else if(ct.includes('블로그')||ct.includes('blog')) inflow='블로그';
                     else if(ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
                     else if(rawInflow.trim()) inflow=rawInflow.trim();
+                    // 견적결과 컬럼 다양한 이름 대응
+                    const resultText = r['견적결과(보고)'] || r['견적결과'] || r['result'] || '-';
                     return {
                         id: Date.now()+idx+Math.random(),
                         kind: kind,
@@ -606,9 +610,9 @@
                         inflow: inflow,
                         phone: r['고객연락처'] || '-',
                         author: r['작성자'] || '-',
-                        items: r['품목명(요약)'] || '-',
-                        amount: parseAmount(r['금액합계(VAT포함)'] || '0'),
-                        result: r['견적결과(보고)'] || '-'
+                        items: r['품목명(요약)'] || r['품목명'] || '-',
+                        amount: parseAmount(r['금액합계(VAT포함)'] || r['금액합계'] || '0'),
+                        result: resultText
                     };
                 };
                 const resultRows = [
