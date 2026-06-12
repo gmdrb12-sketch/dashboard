@@ -468,10 +468,8 @@
 
         /* ================= Google Sheets 공개 CSV 연동 ================= */
         const SHEET_ID = '1hlvBm8nB2qMCoRk_l_ir3Qx_k7DmE06slAJLzWN2a-w';
-        // 각 탭의 gid (시트 하단 탭 URL에서 확인)
-        // 기본값: sales=0, 나머지는 로드 시 자동 탐색
         const TAB_NAMES = { sales: 'sales', ar: 'ar', success: 'success', fail: 'fail' };
-        let sheetGids = {}; // 탭명 → gid 캐시
+        let sheetGids = {}; 
 
         function showSyncStatus(msg, type='info') {
             const el = document.getElementById('sync-status');
@@ -481,17 +479,13 @@
             el.className = `text-[11px] font-bold ${colors[type]||colors.info}`;
         }
 
-        // Sheets JSON API로 탭 gid 자동 조회
         async function fetchSheetGids() {
             try {
                 const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=sales`;
-                // gid 수동 설정 방식 사용 (자동 조회 대신)
             } catch(e) {}
         }
 
-        // 공개 CSV URL로 데이터 읽기
         async function readSheetCSV(tabName) {
-            // gviz/tq API 사용 - CORS 없이 JSON 반환
             const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
             const res = await fetch(url);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -509,7 +503,6 @@
             return result.data || [];
         }
 
-        // 저장은 로컬스토리지 유지 (쓰기는 Sheets에서 직접)
         function saveToLocalStorage() {
             localStorage.setItem('dashboard_base_date', BASE_DATE_STR);
             localStorage.setItem('dashboard_check_date', CHECK_DATE_STR);
@@ -534,9 +527,9 @@
                     readSheetCSV('fail')
                 ]);
 
-                // sales 파싱 (기존 processRows 로직과 동일하게)
+                // sales 파싱 (거래처명 조건 완화)
                 if (salesRows.length) {
-                    allQuotes = salesRows.filter(r => r['거래처명'] && r['거래처명'] !== '거래처명').map((r, idx) => {
+                    allQuotes = salesRows.filter(r => (r['일자-No.'] || r['일자'] || r['거래처명'] || r['거래처']) && r['거래처명'] !== '거래처명').map((r, idx) => {
                         const rawDate = r['일자-No.'] || '';
                         const datePart = String(rawDate).trim().split(' ')[0].replace(/\//g,'-');
                         let rawInflow = r['유입경로'] || '';
@@ -555,7 +548,7 @@
                             id: Date.now()+idx+Math.random(),
                             date: datePart,
                             quoteNo: r['일자-No.'] || '',
-                            company: r['거래처명'] || '-',
+                            company: r['거래처명'] || r['거래처'] || '미지정', // 안전장치 추가
                             phone: r['고객연락처'] || '-',
                             author: r['작성자'] || '-',
                             region: regionShort,
@@ -600,25 +593,27 @@
                     else if(ct.includes('블로그')||ct.includes('blog')) inflow='블로그';
                     else if(ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
                     else if(rawInflow.trim()) inflow=rawInflow.trim();
-                    // 견적결과 컬럼 다양한 이름 대응
                     const resultText = r['견적결과(보고)'] || r['견적결과'] || r['result'] || '-';
                     return {
                         id: Date.now()+idx+Math.random(),
                         kind: kind,
                         date: datePart,
-                        company: r['거래처명'] || '-',
+                        company: r['거래처명'] || r['거래처'] || '미지정', // 안전장치 추가
                         inflow: inflow,
                         phone: r['고객연락처'] || '-',
                         author: r['작성자'] || '-',
                         items: r['품목명(요약)'] || r['품목명'] || '-',
                         amount: parseAmount(r['금액합계(VAT포함)'] || r['금액합계'] || '0'),
-                        result: resultText
+                        resultText: resultText // 오타 수정완료
                     };
                 };
+                
+                // 결과 데이터 조건 완화
                 const resultRows = [
-                    ...successRows.filter(r=>r['거래처명']).map((r,i) => toResultRow(r,'success',i)),
-                    ...failRows.filter(r=>r['거래처명']).map((r,i) => toResultRow(r,'fail',i+10000))
+                    ...successRows.filter(r => r['일자-No.'] || r['일자'] || r['거래처명'] || r['거래처']).map((r,i) => toResultRow(r,'success',i)),
+                    ...failRows.filter(r => r['일자-No.'] || r['일자'] || r['거래처명'] || r['거래처']).map((r,i) => toResultRow(r,'fail',i+10000))
                 ];
+                
                 if (resultRows.length) {
                     allResultData = resultRows;
                     updateResultLabels('success'); updateResultLabels('fail');
@@ -1161,8 +1156,8 @@
         function processResultRows(rows, kind) {
             if (rows.length === 0) return;
             const mapped = rows.filter(r => {
-                const company = r['거래처명'] || r['거래처'] || '';
-                return company && company !== '거래처명';
+                // 필터 완화
+                return (r['일자-No.'] || r['일자'] || r['거래처명'] || r['거래처']) && r['거래처명'] !== '거래처명';
             }).map((r, idx) => {
                 const rawDate = r['일자-No.'] || r['일자'] || '';
                 const datePart = String(rawDate).trim().split(' ')[0].replace(/\//g,'-');
@@ -1180,13 +1175,13 @@
                     id: 'res_' + Date.now() + idx + Math.random(),
                     kind: kind,
                     date: datePart,
-                    company: r['거래처명'] || r['거래처'] || '-',
+                    company: r['거래처명'] || r['거래처'] || '미지정', // 안전장치 추가
                     inflow: inflow,
                     phone: r['고객연락처'] || '-',
                     author: r['작성자'] || r['기안자'] || '-',
                     items: r['품목명(요약)'] || r['품목명'] || r['견적명'] || '-',
                     amount: parseAmount(r['금액합계(VAT포함)'] || r['금액합계'] || r['금액'] || '0'),
-                    resultText: r['견적결과(보고)'] || r['견적결과'] || '-'
+                    resultText: r['견적결과(보고)'] || r['견적결과'] || '-' // 오타 방지
                 };
             });
 
