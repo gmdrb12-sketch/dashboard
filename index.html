@@ -479,21 +479,23 @@
         }
 
         async function sheetsRead(tab) {
-            const res = await fetch(`${GAS_URL}?action=read&tab=${tab}`);
-            const data = await res.json();
+            const res = await fetch(`${GAS_URL}?action=read&tab=${tab}`, { redirect: 'follow' });
+            const text = await res.text();
+            const data = JSON.parse(text);
             if (!data.ok) throw new Error(data.error);
             return data.data || [];
         }
 
         async function sheetsWrite(tab, rows) {
-            const res = await fetch(GAS_URL, {
-                method: 'POST',
-                body: JSON.stringify(rows),
-                headers: { 'Content-Type': 'text/plain' }
-            });
-            // GAS는 redirect를 반환할 수 있으므로 응답 파싱 시도
-            try { const data = await res.json(); if (!data.ok) throw new Error(data.error); }
-            catch(e) { /* redirect 응답은 무시 */ }
+            // POST 대신 GET + payload 파라미터로 전송 (CORS 우회)
+            const payload = encodeURIComponent(JSON.stringify(rows));
+            const url = `${GAS_URL}?action=write&tab=${tab}&payload=${payload}`;
+            const res = await fetch(url, { redirect: 'follow' });
+            const text = await res.text();
+            try {
+                const data = JSON.parse(text);
+                if (!data.ok) throw new Error(data.error);
+            } catch(e) { /* 정상 응답이 아닌 경우 무시 */ }
         }
 
         async function saveToCloud() {
