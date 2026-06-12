@@ -487,15 +487,31 @@
         }
 
         async function sheetsWrite(tab, rows) {
-            // POST 대신 GET + payload 파라미터로 전송 (CORS 우회)
-            const payload = encodeURIComponent(JSON.stringify(rows));
-            const url = `${GAS_URL}?action=write&tab=${tab}&payload=${payload}`;
-            const res = await fetch(url, { redirect: 'follow' });
-            const text = await res.text();
-            try {
-                const data = JSON.parse(text);
-                if (!data.ok) throw new Error(data.error);
-            } catch(e) { /* 정상 응답이 아닌 경우 무시 */ }
+            const CHUNK = 50; // 50행씩 나눠서 전송
+            const chunks = [];
+            for (let i = 0; i < Math.max(rows.length, 1); i += CHUNK) {
+                chunks.push(rows.slice(i, i + CHUNK));
+            }
+            if (rows.length === 0) {
+                // 빈 데이터면 clear만
+                await fetch(`${GAS_URL}?action=clear&tab=${tab}`, { redirect: 'follow' });
+                return;
+            }
+            for (let i = 0; i < chunks.length; i++) {
+                const params = new URLSearchParams({
+                    action: 'write',
+                    tab: tab,
+                    chunk: JSON.stringify(chunks[i]),
+                    index: i,
+                    total: chunks.length
+                });
+                const res = await fetch(`${GAS_URL}?${params.toString()}`, { redirect: 'follow' });
+                const text = await res.text();
+                try {
+                    const data = JSON.parse(text);
+                    if (!data.ok) throw new Error(data.error);
+                } catch(e) { /* 무시 */ }
+            }
         }
 
         async function saveToCloud() {
