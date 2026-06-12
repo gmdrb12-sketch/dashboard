@@ -478,39 +478,43 @@
             el.className = `text-[11px] font-bold ${colors[type]||colors.info}`;
         }
 
+        async function jsonpFetch(url) {
+            return new Promise((resolve, reject) => {
+                const cbName = 'cb_' + Date.now() + '_' + Math.floor(Math.random()*10000);
+                const script = document.createElement('script');
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('JSONP timeout'));
+                }, 15000);
+                function cleanup() {
+                    clearTimeout(timer);
+                    delete window[cbName];
+                    if (script.parentNode) script.parentNode.removeChild(script);
+                }
+                window[cbName] = function(data) { cleanup(); resolve(data); };
+                script.onerror = function() { cleanup(); reject(new Error('JSONP script error')); };
+                script.src = url + '&callback=' + cbName;
+                document.head.appendChild(script);
+            });
+        }
+
         async function sheetsRead(tab) {
-            const res = await fetch(`${GAS_URL}?action=read&tab=${tab}`, { redirect: 'follow' });
-            const text = await res.text();
-            const data = JSON.parse(text);
+            const data = await jsonpFetch(`${GAS_URL}?action=read&tab=${tab}`);
             if (!data.ok) throw new Error(data.error);
             return data.data || [];
         }
 
         async function sheetsWrite(tab, rows) {
-            const CHUNK = 50; // 50행씩 나눠서 전송
-            const chunks = [];
-            for (let i = 0; i < Math.max(rows.length, 1); i += CHUNK) {
-                chunks.push(rows.slice(i, i + CHUNK));
-            }
+            const CHUNK = 50;
             if (rows.length === 0) {
-                // 빈 데이터면 clear만
-                await fetch(`${GAS_URL}?action=clear&tab=${tab}`, { redirect: 'follow' });
+                await jsonpFetch(`${GAS_URL}?action=clear&tab=${tab}`);
                 return;
             }
+            const chunks = [];
+            for (let i = 0; i < rows.length; i += CHUNK) chunks.push(rows.slice(i, i + CHUNK));
             for (let i = 0; i < chunks.length; i++) {
-                const params = new URLSearchParams({
-                    action: 'write',
-                    tab: tab,
-                    chunk: JSON.stringify(chunks[i]),
-                    index: i,
-                    total: chunks.length
-                });
-                const res = await fetch(`${GAS_URL}?${params.toString()}`, { redirect: 'follow' });
-                const text = await res.text();
-                try {
-                    const data = JSON.parse(text);
-                    if (!data.ok) throw new Error(data.error);
-                } catch(e) { /* 무시 */ }
+                const url = `${GAS_URL}?action=write&tab=${tab}&index=${i}&chunk=${encodeURIComponent(JSON.stringify(chunks[i]))}`;
+                await jsonpFetch(url);
             }
         }
 
