@@ -30,7 +30,7 @@
                 <div class="flex items-center gap-3">
                     <span class="px-3 py-1 text-xs font-semibold bg-indigo-100 text-indigo-700 rounded-full">☁️ Google Sheets 읽기 연동</span>
                     <span id="sync-status" class="text-[11px] font-bold text-slate-400">대기 중...</span>
-                    <span id="update-badge" class="text-xs text-rose-500 font-bold">v8.1 만능컬럼패치</span>
+                    <span id="update-badge" class="text-xs text-rose-500 font-bold">v8.2 Cloud Fix</span>
                 </div>
                 <h1 class="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight mt-1">📊 영업 & 채권 통합 관리 시스템</h1>
             </div>
@@ -314,6 +314,7 @@
             </div>
         </div>
 
+        <!-- 채권 탭 -->
         <div id="section-ar" class="hidden">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div class="bg-gradient-to-br from-rose-900 to-rose-700 rounded-2xl p-5 shadow-lg flex flex-col justify-center">
@@ -482,7 +483,8 @@
         }
 
         async function readSheetCSV(tabName) {
-            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+            // 💡 &headers=1 옵션을 추가하여 구글 시트가 1번 데이터 줄을 무시하고 헤더로 합쳐버리는 버그를 원천 차단합니다.
+            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}&headers=1`;
             const res = await fetch(url);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const text = await res.text();
@@ -493,8 +495,8 @@
             const result = Papa.parse(text, {
                 header: true,
                 skipEmptyLines: 'greedy',
-                quoteChar: '"',
-                newline: '\n'
+                quoteChar: '"'
+                // 💡 newline 강제 지정 제거: 줄바꿈 문자를 자동 감지하게 하여 마지막 열 데이터 잘림 현상 해결
             });
             return result.data || [];
         }
@@ -508,7 +510,6 @@
             showSyncStatus('💾 로컬 저장됨', 'info');
         }
 
-        // 💡 만능 키워드 매칭 함수
         function getRowValue(cleanRow, possibleKeywords) {
             for (let target of possibleKeywords) { for (let key in cleanRow) { if (key.trim().toLowerCase() === target.trim().toLowerCase()) return cleanRow[key]; } }
             const normalize = (str) => str.toLowerCase().replace(/[^가-힣a-zA-Z0-9]/g, "");
@@ -534,7 +535,6 @@
                     readSheetCSV('fail')
                 ]);
 
-                // 💡 [핵심] 시트 컬럼명이 띄어쓰기/줄바꿈 등으로 미세하게 다를 때 알아서 찾는 함수
                 const extractData = (rawRow, keywords) => {
                     const cleanRow = {};
                     Object.keys(rawRow).forEach(k => cleanRow[String(k).replace(/[\r\n"'`\u00A0\s]/g, "").trim()] = rawRow[k]);
@@ -607,7 +607,7 @@
                     updateArLabels();
                 }
 
-                // success/fail 파싱 (만능 매칭 적용)
+                // success/fail 파싱
                 const toResultRow = (r, kind, idx) => {
                     const dateVal = extractData(r, ['일자-No.', '일자', '날짜', '수주일']);
                     const companyVal = extractData(r, ['거래처명', '회사명', '고객명', '거래처']);
@@ -626,7 +626,6 @@
                     else if(ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
                     else if(rawInflow.trim()) inflow=rawInflow.trim();
                     
-                    // 핵심: 상세결과 가져오기 (비고, 상세내용, 결과 등 시트 이름이 달라도 잡아냄)
                     const resultText = extractData(r, ['견적결과(보고)', '견적결과', '상세결과', '상세내용', '비고', '결과', 'result']) || '-';
                     
                     return {
