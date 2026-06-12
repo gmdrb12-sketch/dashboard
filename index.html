@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>법인 및 개인 영업 견적/수주 및 채권 통합 대시보드</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans KR', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { height: 6px; width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .accordion-content { max-height: 0px; opacity: 0; overflow: hidden; transition: all 0.3s ease-in-out; }
+        .rotate-180 { transform: rotate(180deg); }
+        .tab-btn.active { background-color: #3182ce; color: white; border-color: #3182ce; box-shadow: 0 4px 6px -1px rgba(49, 130, 206, 0.2); }
+        .tab-btn { background-color: white; color: #475569; border-color: #e2e8f0; }
+        .tab-btn:hover:not(.active) { background-color: #f8fafc; color: #0f172a; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen relative pb-12">
+
+    <div id="app" class="p-4 md:p-6 lg:p-8 max-w-full mx-auto">
+        
+        <header class="mb-6 flex flex-col xl:flex-row xl:items-center xl:justify-between border-b border-slate-200 pb-5 gap-4">
+            <div>
+                <div class="flex items-center gap-3">
+                    <span class="px-3 py-1 text-xs font-semibold bg-indigo-100 text-indigo-700 rounded-full">☁️ Google Sheets 클라우드 연동</span>
+                    <span id="sync-status" class="text-[11px] font-bold text-slate-400">대기 중...</span>
+                    <span id="update-badge" class="text-xs text-rose-500 font-bold">v8.0 Cloud</span>
+                </div>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight mt-1">📊 영업 & 채권 통합 관리 시스템</h1>
+            </div>
+            
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <div class="flex items-center gap-2 bg-white px-3 py-2 border border-slate-200 rounded-xl shadow-sm">
+                    <span class="text-[11px] font-bold text-slate-500 whitespace-nowrap">📅 기준일(마감):</span>
+                    <input type="date" id="base-date-picker" onchange="window.handleGlobalDates()" class="text-xs font-bold text-slate-800 focus:outline-none cursor-pointer bg-transparent border-none">
+                </div>
+                <div class="flex items-center gap-2 bg-white px-3 py-2 border border-rose-200 rounded-xl shadow-sm">
+                    <span class="text-[11px] font-bold text-rose-500 whitespace-nowrap">🔎 확인일(연체):</span>
+                    <input type="date" id="check-date-picker" onchange="window.handleGlobalDates()" class="text-xs font-bold text-rose-700 focus:outline-none cursor-pointer bg-transparent border-none">
+                </div>
+                <button onclick="clearAllData()" class="px-4 py-2 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl transition-all shadow-sm">
+                    🗑️ 데이터 초기화
+                </button>
+            </div>
+        </header>
+
+        <div class="flex gap-2 mb-6 border-b border-slate-200 pb-4 overflow-x-auto">
+            <button onclick="switchTab('sales')" id="tab-btn-sales" class="tab-btn active whitespace-nowrap px-6 py-2.5 rounded-xl font-bold text-sm border shadow-sm transition-all flex items-center gap-2">
+                📈 영업 견적/수주 관리
+            </button>
+            <button onclick="switchTab('result')" id="tab-btn-result" class="tab-btn whitespace-nowrap px-6 py-2.5 rounded-xl font-bold text-sm border shadow-sm transition-all flex items-center gap-2">
+                📋 수주결과 (성공/실패) 관리
+            </button>
+            <button onclick="switchTab('ar')" id="tab-btn-ar" class="tab-btn whitespace-nowrap px-6 py-2.5 rounded-xl font-bold text-sm border shadow-sm transition-all flex items-center gap-2">
+                💰 미수 채권 현황
+            </button>
+        </div>
+
+        <div id="section-sales" class="block">
+            <div class="mb-6 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📁 영업 데이터 파싱 게이트웨이 (.xlsx 또는 .csv 파일)</h2>
+                <div id="upload-zone" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="border-2 border-dashed border-indigo-200 rounded-xl p-4 bg-white hover:border-indigo-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-corp-short">
+                        <input type="file" id="file-corp-short" class="hidden" onchange="handleFileSelect(event, '단기', '법인')">
+                        <span class="text-xs font-bold text-slate-700 pointer-events-none" id="label-corp-short">🏢 법인 단기 등록</span>
+                    </div>
+                    <div class="border-2 border-dashed border-sky-200 rounded-xl p-4 bg-white hover:border-sky-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-corp-long">
+                        <input type="file" id="file-corp-long" class="hidden" onchange="handleFileSelect(event, '장기', '법인')">
+                        <span class="text-xs font-bold text-slate-700 pointer-events-none" id="label-corp-long">🏢 법인 장기 등록</span>
+                    </div>
+                    <div class="border-2 border-dashed border-amber-200 rounded-xl p-4 bg-white hover:border-amber-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-indiv-short">
+                        <input type="file" id="file-indiv-short" class="hidden" onchange="handleFileSelect(event, '단기', '개인')">
+                        <span class="text-xs font-bold text-slate-700 pointer-events-none" id="label-indiv-short">👤 개인 단기 등록</span>
+                    </div>
+                    <div class="border-2 border-dashed border-emerald-200 rounded-xl p-4 bg-white hover:border-emerald-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-indiv-long">
+                        <input type="file" id="file-indiv-long" class="hidden" onchange="handleFileSelect(event, '장기', '개인')">
+                        <span class="text-xs font-bold text-slate-700 pointer-events-none" id="label-indiv-long">👤 개인 장기 등록</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 수주 현황 요약 바 -->
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-6">
+                <div class="flex flex-wrap items-center gap-2 mb-3">
+                    <span class="text-xs font-black text-slate-500 uppercase tracking-wider">📊 수주 현황 요약</span>
+                    <span class="text-[10px] text-slate-400">(성공/실패: 업로드 CSV 기준 / 대기: 현재 가망 목록 기준)</span>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div class="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <p class="text-[10px] font-bold text-slate-400 uppercase mb-1">총 견적</p>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-2xl font-black text-slate-900" id="sr-total">0</span>
+                            <span class="text-xs font-bold text-slate-400">건</span>
+                            <span class="text-[11px] font-black text-slate-500 ml-1" id="sr-total-amt">0원</span>
+                        </div>
+                    </div>
+                    <div class="bg-emerald-50 rounded-xl p-3 border border-emerald-100">
+                        <p class="text-[10px] font-bold text-emerald-500 uppercase mb-1">✅ 수주성공</p>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-2xl font-black text-emerald-700" id="sr-success">0</span>
+                            <span class="text-xs font-bold text-emerald-400">건</span>
+                            <span class="text-[11px] font-black text-emerald-600 ml-1" id="sr-success-amt">0원</span>
+                        </div>
+                        <div class="mt-1">
+                            <div class="w-full bg-emerald-100 rounded-full h-1.5 mt-1">
+                                <div class="bg-emerald-500 h-1.5 rounded-full transition-all" id="sr-success-bar" style="width:0%"></div>
+                            </div>
+                            <span class="text-[10px] font-black text-emerald-600" id="sr-success-pct">0%</span>
+                        </div>
+                    </div>
+                    <div class="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                        <p class="text-[10px] font-bold text-amber-500 uppercase mb-1">⏳ 대기중</p>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-2xl font-black text-amber-700" id="sr-pending">0</span>
+                            <span class="text-xs font-bold text-amber-400">건</span>
+                            <span class="text-[11px] font-black text-amber-600 ml-1" id="sr-pending-amt">0원</span>
+                        </div>
+                        <div class="mt-1">
+                            <div class="w-full bg-amber-100 rounded-full h-1.5 mt-1">
+                                <div class="bg-amber-400 h-1.5 rounded-full transition-all" id="sr-pending-bar" style="width:0%"></div>
+                            </div>
+                            <span class="text-[10px] font-black text-amber-600" id="sr-pending-pct">0%</span>
+                        </div>
+                    </div>
+                    <div class="bg-rose-50 rounded-xl p-3 border border-rose-100">
+                        <p class="text-[10px] font-bold text-rose-500 uppercase mb-1">❌ 수주실패</p>
+                        <div class="flex items-baseline gap-1">
+                            <span class="text-2xl font-black text-rose-700" id="sr-fail">0</span>
+                            <span class="text-xs font-bold text-rose-400">건</span>
+                            <span class="text-[11px] font-black text-rose-600 ml-1" id="sr-fail-amt">0원</span>
+                        </div>
+                        <div class="mt-1">
+                            <div class="w-full bg-rose-100 rounded-full h-1.5 mt-1">
+                                <div class="bg-rose-500 h-1.5 rounded-full transition-all" id="sr-fail-bar" style="width:0%"></div>
+                            </div>
+                            <span class="text-[10px] font-black text-rose-600" id="sr-fail-pct">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-4 gap-6 mb-6">
+                <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-4">
+                    <div class="bg-white rounded-2xl p-6 shadow-md border border-slate-200 flex flex-col justify-between">
+                        <p class="text-slate-500 text-sm font-bold uppercase mb-2">현재 필터 가망 수량</p>
+                        <div class="flex items-baseline gap-1">
+                            <h3 class="text-4xl font-black text-slate-900" id="stat-total-count">0</h3>
+                            <span class="text-lg font-bold text-slate-400">건</span>
+                        </div>
+                        <div class="text-[11px] text-indigo-600 font-bold mt-4 pt-3 border-t border-slate-100" id="stat-ratio-summary">법인 0건 / 개인 0건</div>
+                    </div>
+                    
+                    <div class="bg-gradient-to-br from-slate-900 via-indigo-950 to-indigo-900 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+                        <p class="text-indigo-200 text-sm font-bold uppercase mb-2">현재 필터 가망 총액</p>
+                        <div class="flex items-baseline gap-1">
+                            <h3 class="text-4xl sm:text-4xl lg:text-5xl font-black text-white" id="stat-total-amount">0</h3>
+                            <span class="text-xl font-bold text-indigo-200">원</span>
+                        </div>
+                        <p class="text-[11px] text-indigo-300 font-medium mt-4 pt-4 border-t border-indigo-800/50">VAT 포함 / 실시간 동기화</p>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-6 shadow-md border border-rose-200 flex flex-col justify-between">
+                        <p class="text-rose-500 text-sm font-bold uppercase mb-2">⚠️ 수주일 경과</p>
+                        <div class="flex items-baseline gap-1">
+                            <h3 class="text-4xl font-black text-rose-600" id="stat-overdue-count">0</h3>
+                            <span class="text-lg font-bold text-rose-400">건</span>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-6 shadow-md border border-emerald-200 flex flex-col justify-between">
+                        <p class="text-emerald-600 text-sm font-bold uppercase mb-2">밀착 소통 건수 (7일)</p>
+                        <div class="flex items-baseline gap-1">
+                            <h3 class="text-4xl font-black text-emerald-600" id="stat-recent-contact-count">0</h3>
+                            <span class="text-lg font-bold text-emerald-400">건</span>
+                        </div>
+                        <div class="text-[11px] text-emerald-600 font-bold mt-4 pt-3 border-t border-emerald-50" id="stat-recent-contact-ratio">소통비율: 0%</div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+                    <span class="text-slate-900 text-sm font-black mb-4 border-b border-slate-100 pb-3">📅 월별 예상 수주액</span>
+                    <div class="flex-1 overflow-y-auto max-h-[350px] custom-scrollbar" id="forecast-month-list"></div>
+                </div>
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+                    <span class="text-slate-900 text-sm font-black mb-4 border-b border-slate-100 pb-3">📦 품목별 월간 수주 현황</span>
+                    <div class="flex-1 overflow-y-auto max-h-[350px] custom-scrollbar" id="product-summary-list"></div>
+                </div>
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+                    <span class="text-slate-900 text-sm font-black mb-4 border-b border-slate-100 pb-3">📣 유입 채널 성과</span>
+                    <div class="flex-1 overflow-y-auto max-h-[350px] custom-scrollbar" id="inflow-summary-list"></div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-100 mb-6 flex flex-col xl:flex-row gap-4 xl:items-center xl:justify-between">
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <div class="flex bg-slate-100 p-1 rounded-lg">
+                        <button onclick="changeCustomerFilter('all')" id="btn-cust-all" class="px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm">전체사업자</button>
+                        <button onclick="changeCustomerFilter('법인')" id="btn-cust-corp" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500">🏢 법인영업</button>
+                        <button onclick="changeCustomerFilter('개인')" id="btn-cust-indiv" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500">👤 개인사업자</button>
+                    </div>
+                    <div class="flex bg-slate-100 p-1 rounded-lg">
+                        <button onclick="changeSalesLocalTab('all')" id="tab-all" class="px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm">전체기간</button>
+                        <button onclick="changeSalesLocalTab('short')" id="tab-short" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500">단기가망</button>
+                        <button onclick="changeSalesLocalTab('long')" id="tab-long" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500">장기가망</button>
+                        <button onclick="changeSalesLocalTab('overdue')" id="tab-overdue" class="px-4 py-1.5 text-xs font-black rounded-md text-rose-500">⚠️ 지연건</button>
+                    </div>
+                </div>
+                <div class="flex flex-col sm:flex-row gap-2 items-center">
+                    <select id="author-filter" onchange="handleSearch()" class="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none shadow-sm"></select>
+                    <input type="text" id="search-input" oninput="handleSearch()" placeholder="검색어 입력..." class="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:bg-white transition-all w-full sm:w-64">
+                    <button onclick="exportToCSV()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm whitespace-nowrap">다운로드</button>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden mb-6">
+                <div class="overflow-x-auto custom-scrollbar">
+                    <table class="w-full text-left border-collapse min-w-[1450px]">
+                        <thead>
+                            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px] font-black uppercase">
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleSort('date')">견적일 <span id="sort-icon-date">▼</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('type')">구분 <span id="sort-icon-type">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('author')">작성자 <span id="sort-icon-author">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('region')">지역 <span id="sort-icon-region">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleSort('company')">거래처명 <span id="sort-icon-company">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleSort('phone')">고객연락처 <span id="sort-icon-phone">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('inflow')">경로 <span id="sort-icon-inflow">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleSort('items')">품목명 <span id="sort-icon-items">↕</span></th>
+                                <th class="p-3 text-right cursor-pointer hover:bg-slate-200" onclick="handleSort('amount')">금액 <span id="sort-icon-amount">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('status')">상태 <span id="sort-icon-status">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200" onclick="handleSort('dueDate')">수주예상 <span id="sort-icon-dueDate">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleSort('contact')">최근 연락 이력 <span id="sort-icon-contact">↕</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body" class="divide-y divide-slate-100 text-xs"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 수주결과(성공/실패 통합) 섹션 ===== -->
+        <div id="section-result" class="hidden">
+            <div class="mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <h2 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">📁 수주결과 CSV 업로드 구역</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="border-2 border-dashed border-emerald-200 rounded-xl p-5 bg-emerald-50/30 hover:border-emerald-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-success">
+                        <input type="file" id="file-success" class="hidden" accept=".csv" onchange="handleResultFileSelect(event,'success')">
+                        <div id="label-success" class="pointer-events-none">
+                            <span class="text-sm font-bold text-slate-700">✅ 수주성공 CSV 등록</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 pointer-events-none mt-2">클릭 또는 드래그</span>
+                    </div>
+                    <div class="border-2 border-dashed border-rose-200 rounded-xl p-5 bg-rose-50/30 hover:border-rose-500 transition-all flex flex-col items-center justify-center text-center cursor-pointer relative" id="drop-fail">
+                        <input type="file" id="file-fail" class="hidden" accept=".csv" onchange="handleResultFileSelect(event,'fail')">
+                        <div id="label-fail" class="pointer-events-none">
+                            <span class="text-sm font-bold text-slate-700">❌ 수주실패 CSV 등록</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 pointer-events-none mt-2">클릭 또는 드래그</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 수주결과 요약 (품목별, 유입경로별) -->
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+                    <span class="text-slate-900 text-sm font-black mb-4 border-b border-slate-100 pb-3" id="result-prod-title">📦 품목별 전체 수주결과 성과</span>
+                    <div class="flex-1 overflow-y-auto max-h-[350px] custom-scrollbar" id="result-product-summary-list"></div>
+                </div>
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
+                    <span class="text-slate-900 text-sm font-black mb-4 border-b border-slate-100 pb-3" id="result-inflow-title">📣 유입 채널별 전체 수주결과 성과</span>
+                    <div class="flex-1 overflow-y-auto max-h-[350px] custom-scrollbar" id="result-inflow-summary-list"></div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-100 mb-4 flex flex-col sm:flex-row gap-2 items-center justify-between">
+                <div class="flex bg-slate-100 p-1 rounded-lg">
+                    <button onclick="changeResultFilter('all')" id="btn-result-all" class="px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm flex items-center gap-1 transition-all border border-slate-200/60">
+                        전체결과 <span id="btn-text-all" class="text-[10px] opacity-80 whitespace-nowrap">(0건 / 0원)</span>
+                    </button>
+                    <button onclick="changeResultFilter('success')" id="btn-result-success" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500 flex items-center gap-1 transition-all hover:bg-slate-200/50">
+                        ✅ 성공 <span id="btn-text-success" class="text-[10px] opacity-80 whitespace-nowrap">(0건 / 0원)</span>
+                    </button>
+                    <button onclick="changeResultFilter('fail')" id="btn-result-fail" class="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500 flex items-center gap-1 transition-all hover:bg-slate-200/50">
+                        ❌ 실패 <span id="btn-text-fail" class="text-[10px] opacity-80 whitespace-nowrap">(0건 / 0원)</span>
+                    </button>
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <select id="author-filter-result" onchange="renderResultTable()" class="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none shadow-sm"></select>
+                    <input type="text" id="search-result" oninput="renderResultTable()" placeholder="거래처, 품목, 작성자 검색..." class="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:bg-white shadow-sm">
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden mb-6">
+                <div class="overflow-x-auto custom-scrollbar">
+                    <table class="w-full text-left border-collapse min-w-[1200px]">
+                        <thead>
+                            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px] font-black uppercase tracking-wider">
+                                <th class="p-3 text-center w-16">결과</th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('date')">일자 <span id="sort-result-date">▼</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('company')">거래처명 <span id="sort-result-company">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('inflow')">유입경로 <span id="sort-result-inflow">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('phone')">고객연락처 <span id="sort-result-phone">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('author')">작성자 <span id="sort-result-author">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('items')">품목 <span id="sort-result-items">↕</span></th>
+                                <th class="p-3 text-right cursor-pointer hover:bg-slate-200" onclick="handleResultSort('amount')">금액 <span id="sort-result-amount">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleResultSort('resultText')">상세결과 <span id="sort-result-resultText">↕</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body-result" class="divide-y divide-slate-100 text-xs"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 채권 탭 -->
+        <div id="section-ar" class="hidden">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                <div class="bg-gradient-to-br from-rose-900 to-rose-700 rounded-2xl p-5 shadow-lg flex flex-col justify-center">
+                    <p class="text-rose-200 text-xs font-bold uppercase mb-1">💰 총 미수금 잔액</p>
+                    <div class="flex items-baseline gap-1">
+                        <h3 class="text-4xl font-black text-white" id="ar-summary-amount">0</h3>
+                        <span class="text-lg font-bold text-rose-200">원</span>
+                    </div>
+                </div>
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-rose-200 flex flex-col justify-center">
+                    <p class="text-rose-500 text-xs font-bold uppercase mb-1">🚨 입금 지연 / 문제 건수</p>
+                    <div class="flex items-baseline gap-1">
+                        <h3 class="text-4xl font-black text-rose-600" id="ar-summary-count">0</h3>
+                        <span class="text-lg font-bold text-rose-400">건</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-6 bg-white p-4 rounded-xl border border-rose-100 shadow-sm">
+                <h2 class="text-xs font-bold text-rose-400 uppercase tracking-wider mb-3">📁 채권 데이터 파싱 게이트웨이 (.csv 전용)</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="border-2 border-dashed border-rose-200 rounded-xl p-5 bg-rose-50/30 hover:border-rose-500 transition-all flex flex-col items-center justify-center cursor-pointer relative" id="drop-ar-corp">
+                        <input type="file" id="file-ar-corp" class="hidden" accept=".csv" onchange="handleArFileSelect(event, '법인')">
+                        <span class="text-sm font-bold text-slate-700 pointer-events-none" id="label-ar-corp">🏢 법인 채권 CSV 등록</span>
+                    </div>
+                    <div class="border-2 border-dashed border-amber-200 rounded-xl p-5 bg-amber-50/30 hover:border-amber-500 transition-all flex flex-col items-center justify-center cursor-pointer relative" id="drop-ar-indiv">
+                        <input type="file" id="file-ar-indiv" class="hidden" accept=".csv" onchange="handleArFileSelect(event, '개인')">
+                        <span class="text-sm font-bold text-slate-700 pointer-events-none" id="label-ar-indiv">👤 개인 채권 CSV 등록</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-100 mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                <div class="flex bg-slate-100 p-1 rounded-lg">
+                    <button onclick="changeArFilter('all')" id="ar-btn-all" class="px-5 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm">전체 채권</button>
+                    <button onclick="changeArFilter('warning')" id="ar-btn-warning" class="px-5 py-1.5 text-xs font-bold rounded-md text-rose-500">🚨 연체/문제 채권</button>
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <select id="author-filter-ar" onchange="renderArTable()" class="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none shadow-sm"></select>
+                    <input type="text" id="search-input-ar" oninput="renderArTable()" placeholder="거래처, 메모 검색..." class="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:bg-white shadow-sm">
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden mb-6">
+                <div class="overflow-x-auto custom-scrollbar">
+                    <table class="w-full text-left border-collapse min-w-[1200px]">
+                        <thead>
+                            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px] font-black uppercase tracking-wider">
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200 w-16" onclick="handleArSort('type')">구분 <span id="sort-ar-type">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200 w-20" onclick="handleArSort('manager')">담당자 <span id="sort-ar-manager">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200 w-40" onclick="handleArSort('company')">거래처명 <span id="sort-ar-company">↕</span></th>
+                                <th class="p-3 text-right cursor-pointer hover:bg-slate-200 w-28" onclick="handleArSort('balance')">잔액(원) <span id="sort-ar-balance">▼</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200 w-32" onclick="handleArSort('condition')">결제조건 <span id="sort-ar-condition">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200 w-28" onclick="handleArSort('dueDate')">계산된 예정일 <span id="sort-ar-dueDate">↕</span></th>
+                                <th class="p-3 text-center cursor-pointer hover:bg-slate-200 w-32" onclick="handleArSort('status')">상태 <span id="sort-ar-status">↕</span></th>
+                                <th class="p-3 cursor-pointer hover:bg-slate-200" onclick="handleArSort('memo')">관리자 메모 <span id="sort-ar-memo">↕</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body-ar" class="divide-y divide-slate-100 text-xs"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="detail-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+            <div class="bg-white rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden transform scale-95 opacity-0 transition-all duration-300" id="modal-container">
+                <div class="p-6 border-b border-slate-100 flex justify-between items-start">
+                    <div class="flex items-center gap-2">
+                        <span id="modal-badge-type" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100"></span>
+                        <span id="modal-badge-term" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100"></span>
+                        <h3 id="modal-title" class="text-xl font-black text-slate-950 ml-2">거래처 상세</h3>
+                    </div>
+                    <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 p-1.5 bg-slate-50 rounded-lg"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                </div>
+                <div class="p-6 space-y-5 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">견적 일자</span><span id="modal-date" class="text-sm font-semibold text-slate-800"></span></div>
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">작성자</span><span id="modal-author" class="text-sm font-bold text-slate-800"></span></div>
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">지역/상태</span><span id="modal-region" class="text-sm font-bold text-slate-800"></span></div>
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">금액</span><span id="modal-amount" class="text-base font-black text-indigo-600"></span></div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-slate-100 pt-3">
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">고객 연락처</span><span id="modal-phone" class="text-xs font-bold text-slate-900 bg-slate-100 px-2 py-1 rounded inline-block mt-0.5"></span></div>
+                        <div><span class="text-[10px] text-slate-400 block font-bold mb-1">인입경로</span><span id="modal-inflow" class="inline-block mt-0.5"></span></div>
+                        <div id="modal-delivery-container">
+                            <span class="text-[10px] text-slate-400 block font-bold mb-1">수주 예상일</span>
+                            <div class="flex items-center gap-2 mt-0.5">
+                                <span id="modal-delivery" class="text-sm font-semibold text-slate-800"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div><span class="text-[10px] text-slate-400 block font-bold mb-1">최종 품목 내역</span><span id="modal-items" class="text-xs font-semibold bg-slate-50 p-3 rounded-lg block text-slate-700 leading-relaxed whitespace-pre-wrap"></span></div>
+                    <div id="modal-history-container">
+                        <span class="text-[10px] text-slate-400 block font-black mb-2" id="modal-history-title">📞 영업 상담 히스토리</span>
+                        <div id="modal-history" class="space-y-3 pl-3 border-l-2 border-indigo-200"></div>
+                    </div>
+                </div>
+                <div class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+                    <button onclick="closeModal()" class="px-5 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold">닫기</button>
+                </div>
+            </div>
+        </div>
+        <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+    </div>
+
+    <script>
+        /* ================= 글로벌 상태 ================= */
+        let todayStr = new Date().toISOString().split('T')[0];
+        let BASE_DATE_STR = todayStr;
+        let CHECK_DATE_STR = todayStr;
+        let BASE_DATE = new Date(BASE_DATE_STR);
+        let CHECK_DATE = new Date(CHECK_DATE_STR);
+
+        let allQuotes = []; let filteredQuotes = [];
+        let currentCustType = 'all'; let currentSalesTab = 'all';          
+        let sortConfig = { key: 'date', direction: 'desc' }; 
+
+        let allArData = []; let arFilterType = 'all'; 
+        let arSort = { key: 'balance', direction: 'desc' };
+
+        let allResultData = [];
+        let resultFilterType = 'all'; 
+        let resultSort = { key: 'date', direction: 'desc' };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('base-date-picker').value = BASE_DATE_STR;
+            document.getElementById('check-date-picker').value = CHECK_DATE_STR;
+            setupDragAndDrop(); loadSavedData();
+        });
+
+        window.switchTab = function(tabId) {
+            ['sales','result','ar'].forEach(t => {
+                document.getElementById(`tab-btn-${t}`).classList.remove('active');
+                document.getElementById(`section-${t}`).classList.add('hidden');
+            });
+            document.getElementById(`tab-btn-${tabId}`).classList.add('active');
+            document.getElementById(`section-${tabId}`).classList.remove('hidden');
+        }
+
+        window.handleGlobalDates = function() {
+            let nBase = document.getElementById('base-date-picker').value;
+            let nCheck = document.getElementById('check-date-picker').value;
+            if(nBase) { BASE_DATE_STR = nBase; BASE_DATE = new Date(nBase); }
+            if(nCheck) { CHECK_DATE_STR = nCheck; CHECK_DATE = new Date(nCheck); }
+            saveToLocalStorage(); applyFiltersAndRender(); renderArTable();
+            showToast('날짜 기준이 변경되었습니다.', 'info');
+        }
+
+        /* ================= Google Sheets 연동 ================= */
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbxLLCniRMuwr5vEp73VMyO98YwjGOmaKyyGe9GL0onMnRM7D_mcKrUpEvl-C4ctRvDBZg/exec';
+        let isSyncing = false;
+
+        function showSyncStatus(msg, type='info') {
+            const el = document.getElementById('sync-status');
+            if (!el) return;
+            const colors = { info:'text-slate-400', success:'text-emerald-500', error:'text-rose-500', loading:'text-indigo-400' };
+            el.textContent = msg;
+            el.className = `text-[11px] font-bold ${colors[type]||colors.info}`;
+        }
+
+        async function sheetsRead(tab) {
+            const res = await fetch(`${GAS_URL}?action=read&tab=${tab}`);
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error);
+            return data.data || [];
+        }
+
+        async function sheetsWrite(tab, rows) {
+            const res = await fetch(GAS_URL, {
+                method: 'POST',
+                body: JSON.stringify(rows),
+                headers: { 'Content-Type': 'text/plain' }
+            });
+            // GAS는 redirect를 반환할 수 있으므로 응답 파싱 시도
+            try { const data = await res.json(); if (!data.ok) throw new Error(data.error); }
+            catch(e) { /* redirect 응답은 무시 */ }
+        }
+
+        async function saveToCloud() {
+            if (isSyncing) return;
+            isSyncing = true;
+            showSyncStatus('☁️ 저장 중...', 'loading');
+            try {
+                // 날짜 설정은 로컬스토리지에만 저장 (단순 설정값)
+                localStorage.setItem('dashboard_base_date', BASE_DATE_STR);
+                localStorage.setItem('dashboard_check_date', CHECK_DATE_STR);
+                // 데이터는 Sheets에 저장
+                await Promise.all([
+                    sheetsWrite('sales', allQuotes),
+                    sheetsWrite('ar', allArData),
+                    sheetsWrite('success', (allResultData||[]).filter(r=>r.kind==='success')),
+                    sheetsWrite('fail', (allResultData||[]).filter(r=>r.kind==='fail'))
+                ]);
+                showSyncStatus('✅ 저장됨 ' + new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}), 'success');
+            } catch(e) {
+                console.error('Cloud save error:', e);
+                showSyncStatus('⚠️ 저장 실패 (로컬 백업됨)', 'error');
+                // 실패 시 로컬스토리지에 백업
+                localStorage.setItem('sales_quote_all_quotes', JSON.stringify(allQuotes));
+                localStorage.setItem('dashboard_ar_data', JSON.stringify(allArData));
+                localStorage.setItem('dashboard_result_data', JSON.stringify(allResultData));
+            }
+            isSyncing = false;
+        }
+
+        // 기존 saveToLocalStorage 호출부 호환용 (내부적으로 클라우드 저장)
+        function saveToLocalStorage() { saveToCloud(); }
+
+        async function loadSavedData() {
+            const sBase = localStorage.getItem('dashboard_base_date');
+            const sCheck = localStorage.getItem('dashboard_check_date');
+            if(sBase) { BASE_DATE_STR = sBase; BASE_DATE = new Date(sBase); document.getElementById('base-date-picker').value = sBase; }
+            if(sCheck) { CHECK_DATE_STR = sCheck; CHECK_DATE = new Date(sCheck); document.getElementById('check-date-picker').value = sCheck; }
+
+            showSyncStatus('☁️ 데이터 불러오는 중...', 'loading');
+            try {
+                const [salesRows, arRows, successRows, failRows] = await Promise.all([
+                    sheetsRead('sales'),
+                    sheetsRead('ar'),
+                    sheetsRead('success'),
+                    sheetsRead('fail')
+                ]);
+                if (salesRows.length) {
+                    allQuotes = salesRows.map(r => ({
+                        ...r,
+                        id: r.id ? Number(r.id) : Date.now()+Math.random(),
+                        amount: r.amount ? Number(r.amount) : 0
+                    }));
+                    updateLabels();
+                }
+                if (arRows.length) {
+                    allArData = arRows.map(r => ({ ...r, balance: r.balance ? Number(r.balance) : 0 }));
+                    updateArLabels();
+                }
+                const resultRows = [
+                    ...successRows.map(r => ({ ...r, kind:'success', amount: r.amount ? Number(r.amount) : 0 })),
+                    ...failRows.map(r => ({ ...r, kind:'fail', amount: r.amount ? Number(r.amount) : 0 }))
+                ];
+                if (resultRows.length) {
+                    allResultData = resultRows;
+                    updateResultLabels('success'); updateResultLabels('fail');
+                }
+                showSyncStatus('✅ 최신 데이터 로드됨', 'success');
+            } catch(e) {
+                console.error('Cloud load error:', e);
+                showSyncStatus('⚠️ 네트워크 오류 — 로컬 데이터 사용 중', 'error');
+                // 클라우드 실패 시 로컬스토리지 폴백
+                const sSales = localStorage.getItem('sales_quote_all_quotes'); if(sSales) { allQuotes = JSON.parse(sSales); updateLabels(); }
+                const sAr = localStorage.getItem('dashboard_ar_data'); if(sAr) { allArData = JSON.parse(sAr); updateArLabels(); }
+                const sResult = localStorage.getItem('dashboard_result_data'); if(sResult) { allResultData = JSON.parse(sResult); updateResultLabels('success'); updateResultLabels('fail'); }
+            }
+            applyFiltersAndRender(); renderArTable(); renderResultTable();
+        }
+
+        window.clearAllData = async function() {
+            if(confirm("모든 데이터를 영구 삭제하시겠습니까?\n(Google Sheets 데이터도 함께 삭제됩니다)")) {
+                showSyncStatus('🗑️ 삭제 중...', 'loading');
+                allQuotes=[]; allArData=[]; allResultData=[];
+                localStorage.clear();
+                try {
+                    await Promise.all([
+                        sheetsWrite('sales', []),
+                        sheetsWrite('ar', []),
+                        sheetsWrite('success', []),
+                        sheetsWrite('fail', [])
+                    ]);
+                } catch(e) { console.error(e); }
+                location.reload();
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            let bgClass = type === 'success' ? 'bg-indigo-600' : (type === 'error' ? 'bg-rose-600' : 'bg-slate-800');
+            toast.className = `${bgClass} text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-bold transform translate-y-2 opacity-0 transition-all duration-300 pointer-events-auto`;
+            toast.innerHTML = `<span>${type === 'success' ? '✨' : '⚠️'}</span><span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
+            setTimeout(() => { toast.classList.add('translate-y-2', 'opacity-0'); setTimeout(() => toast.remove(), 3500); }, 3500);
+        }
+
+        window.toggleAccordion = function(id) {
+            const content = document.getElementById('content-' + id);
+            const icon = document.getElementById('icon-' + id);
+            if (!content) return;
+            if (content.style.maxHeight && content.style.maxHeight !== '0px') {
+                content.style.maxHeight = '0px'; content.style.opacity = '0'; content.style.paddingTop = '0px'; content.style.paddingBottom = '0px';
+                if(icon) icon.classList.remove('rotate-180');
+            } else {
+                content.style.maxHeight = content.scrollHeight + 20 + "px"; content.style.opacity = '1'; content.style.paddingTop = '8px'; content.style.paddingBottom = '8px';
+                if(icon) icon.classList.add('rotate-180');
+            }
+        }
+
+        /* ================= 영업 파싱 ================= */
+        function setupDragAndDrop() {
+            const zones = [
+                { id: 'drop-corp-short', inputId: 'file-corp-short', source: '단기', type: '법인', sys: 'sales' },
+                { id: 'drop-corp-long', inputId: 'file-corp-long', source: '장기', type: '법인', sys: 'sales' },
+                { id: 'drop-indiv-short', inputId: 'file-indiv-short', source: '단기', type: '개인', sys: 'sales' },
+                { id: 'drop-indiv-long', inputId: 'file-indiv-long', source: '장기', type: '개인', sys: 'sales' },
+                { id: 'drop-ar-corp', inputId: 'file-ar-corp', sys: 'ar', type: '법인' },
+                { id: 'drop-ar-indiv', inputId: 'file-ar-indiv', sys: 'ar', type: '개인' },
+                { id: 'drop-success', inputId: 'file-success', sys: 'result', type: 'success' },
+                { id: 'drop-fail', inputId: 'file-fail', sys: 'result', type: 'fail' }
+            ];
+            zones.forEach(z => {
+                const el = document.getElementById(z.id); if (!el) return;
+                el.addEventListener('click', () => { document.getElementById(z.inputId).click(); });
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => { el.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false); });
+                el.addEventListener('drop', e => {
+                    if (e.dataTransfer.files.length) {
+                        const fakeEvent = { target: { files: e.dataTransfer.files } };
+                        if(z.sys === 'sales') handleFileSelect(fakeEvent, z.source, z.type);
+                        else if(z.sys === 'ar') handleArFileSelect(fakeEvent, z.type);
+                        else if(z.sys === 'result') handleResultFileSelect(fakeEvent, z.type);
+                    }
+                }, false);
+            });
+        }
+
+        window.handleFileSelect = function(event, source, customerType) {
+            const file = event.target.files[0]; if (!file) return;
+            const fileName = file.name.toLowerCase();
+            if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) handleExcelSelect(file, source, customerType);
+            else if (fileName.endsWith('.csv')) handleCsvSelect(file, source, customerType);
+            else showToast("올바른 양식이 아닙니다.", "error");
+        };
+
+        function handleCsvSelect(file, source, customerType) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                let buffer = e.target.result; let text = new TextDecoder('utf-8').decode(buffer);
+                if (!/[가-힣]/.test(text)) text = new TextDecoder('euc-kr').decode(buffer);
+                let headerIndex = text.indexOf("일자-No."); if (headerIndex === -1) headerIndex = text.indexOf("거래처명,");
+                if (headerIndex !== -1) { let lastNewline = text.lastIndexOf('\n', headerIndex); text = text.substring(lastNewline === -1 ? 0 : lastNewline + 1); }
+                Papa.parse(text, { header: true, skipEmptyLines: 'greedy', complete: function(results) { processParsedRows(results.data, source, customerType); } });
+            }; reader.readAsArrayBuffer(file);
+        }
+
+        function handleExcelSelect(file, source, customerType) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, {type: 'array', cellDates: true});
+                    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(worksheet, {header: 1, defval: ""});
+                    let headerIdx = -1;
+                    for (let i = 0; i < Math.min(rows.length, 25); i++) {
+                        const rowStr = rows[i].map(cell => String(cell || '').trim());
+                        if (rowStr.some(cell => cell.includes("일자-No.") || cell === "거래처명" || cell === "일자")) { headerIdx = i; break; }
+                    }
+                    if (headerIdx === -1) { showToast("엑셀 파일 내에 헤더가 없습니다.", "error"); return; }
+                    const headers = rows[headerIdx].map(h => String(h || '').trim().replace(/[\r\n]/g, " "));
+                    const dataRows = rows.slice(headerIdx + 1);
+                    const parsedData = dataRows.filter(row => row.some(cell => cell !== "")).map(row => {
+                        const obj = {}; headers.forEach((h, idx) => { if (h) obj[h] = row[idx] !== undefined ? row[idx] : ""; }); return obj;
+                    });
+                    processParsedRows(parsedData, source, customerType);
+                } catch (err) { showToast("엑셀 디코딩 예외가 발생했습니다.", "error"); }
+            }; reader.readAsArrayBuffer(file);
+        }
+
+        function parseRawDate(val) {
+            if (!val) return "";
+            if (val instanceof Date) return `${val.getFullYear()}-${String(val.getMonth() + 1).padStart(2, '0')}-${String(val.getDate()).padStart(2, '0')}`;
+            if (typeof val === 'number') { const date = new Date(Math.round((val - 25569) * 86400 * 1000)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
+            let str = String(val).trim().split(' ')[0]; 
+            if (/^\d{8}-\d+$/.test(str)) str = str.split('-')[0];
+            if (/^\d{6}-\d+$/.test(str)) str = str.split('-')[0];
+            if (/^\d{8}$/.test(str)) return `${str.substring(0,4)}-${str.substring(4,6)}-${str.substring(6,8)}`;
+            if (/^\d{6}$/.test(str)) return `20${str.substring(0,2)}-${str.substring(2,4)}-${str.substring(4,6)}`;
+            return str.replace(/\//g, '-').replace(/\./g, '-');
+        }
+
+        function getQuoteSuffix(quoteNo) {
+            if (!quoteNo) return ''; let str = String(quoteNo).trim();
+            if (str.includes(' ')) return str.substring(str.indexOf(' ')).trim();
+            const match = str.match(/^\d{6,8}(-\d+)$/); if (match) return match[1]; return '';
+        }
+
+        function parseAmount(val) {
+            if (val === undefined || val === null || val === '') return 0;
+            if (typeof val === 'number') return Math.round(val) || 0;
+            let str = String(val).trim().replace(/[₩$,\s]/g, '');
+            let num = parseFloat(str); if (isNaN(num)) { str = str.replace(/[^0-9.-]/g, ''); num = parseFloat(str); }
+            return isNaN(num) ? 0 : Math.round(num);
+        }
+
+        function getRowValue(cleanRow, possibleKeywords) {
+            for (let target of possibleKeywords) { for (let key in cleanRow) { if (key.trim().toLowerCase() === target.trim().toLowerCase()) return cleanRow[key]; } }
+            const normalize = (str) => str.toLowerCase().replace(/[^가-힣a-zA-Z0-9]/g, "");
+            for (let target of possibleKeywords) {
+                const normTarget = normalize(target); if (!normTarget) continue;
+                for (let key in cleanRow) { const normKey = normalize(key); if (normKey === normTarget || normKey.includes(normTarget) || normTarget.includes(normKey)) return cleanRow[key]; }
+            }
+            return "";
+        }
+
+        function processParsedRows(cleanRows, source, customerType) {
+            if (cleanRows.length === 0) return;
+            const filteredRawRows = cleanRows.filter(row => {
+                const companyVal = getRowValue(row, ['거래처명', '회사명', '고객명', '거래처', '상호']);
+                const dateVal = getRowValue(row, ['일자-No.', '일자', '날짜', '견적일', '등록일']);
+                return companyVal && dateVal && companyVal !== '거래처명' && dateVal !== '일자-No.';
+            });
+            if (filteredRawRows.length === 0) return;
+
+            const cleanFirstRow = {}; Object.keys(filteredRawRows[0]).forEach(k => cleanFirstRow[k.replace(/[\r\n"'`\u00A0]/g, "").trim()] = filteredRawRows[0][k]);
+            const keysList = Object.keys(cleanFirstRow);
+
+            const dateKey = keysList.find(k => getRowValue({[k]: 1}, ['일자-No.', '일자', '날짜'])) || '';
+            const companyKey = keysList.find(k => getRowValue({[k]: 1}, ['거래처명', '회사명', '고객명'])) || '';
+            const phoneKey = keysList.find(k => getRowValue({[k]: 1}, ['고객연락처', '연락처', '전화번호', '휴대폰'])) || '';
+            const authorKey = keysList.find(k => getRowValue({[k]: 1}, ['작성자', '기안자', '영업담당'])) || '';
+            const regionKey = keysList.find(k => getRowValue({[k]: 1}, ['지역', '권역', '주소'])) || '';
+            const amountKey = keysList.find(k => getRowValue({[k]: 1}, ['금액합계(VAT포함)', '금액합계', '금액'])) || '';
+            const dueDateKey = keysList.find(k => getRowValue({[k]: 1}, ['수주예상일', '수주예상'])) || '';
+            const statusKey = keysList.find(k => getRowValue({[k]: 1}, ['진행상태', '상태'])) || '';
+            const itemsKey = keysList.find(k => getRowValue({[k]: 1}, ['품목명(요약)', '품목명', '견적명'])) || '';
+            const historyKey = keysList.find(k => getRowValue({[k]: 1}, ['견적결과(보고)요약', '견적결과(보고)', '상담', '비고'])) || '';
+            const inflowKey = keysList.find(k => getRowValue({[k]: 1}, ['유입경로', '인입경로', '채널'])) || '';
+            const quoteNameKey = keysList.find(k => getRowValue({[k]: 1}, ['견적명', '건명'])) || '';
+
+            const formatted = filteredRawRows.map((row, idx) => {
+                const cleanRow = {}; Object.keys(row).forEach(k => cleanRow[k.replace(/[\r\n"'`\u00A0]/g, "").trim()] = row[k]);
+                let cleanDate = parseRawDate(cleanRow[dateKey] || '');
+                let cleanDueDate = "-"; let rawDueDate = cleanRow[dueDateKey];
+                if (rawDueDate && rawDueDate !== 'x' && rawDueDate !== '미등록') { cleanDueDate = parseRawDate(rawDueDate); let p = cleanDueDate.split('-'); if(p.length===3){if(p[0].length===2)p[0]='20'+p[0];cleanDueDate=p.join('-');}else cleanDueDate="-"; }
+                
+                const amountNum = parseAmount(cleanRow[amountKey]);
+                const history = cleanRow[historyKey] || ''; const quoteName = cleanRow[quoteNameKey] || '';
+                
+                let rawInflow = cleanRow[inflowKey] || ''; let parsedInflow = '기타/오프라인';
+                const ct = (String(rawInflow) + " " + String(history) + " " + String(quoteName)).toLowerCase();
+                if (ct.includes('유튜브') || ct.includes('영상') || ct.includes('youtube')) parsedInflow = '유튜브';
+                else if (ct.includes('당근') || ct.includes('daangn')) parsedInflow = '당근';
+                else if (ct.includes('블로그') || ct.includes('blog')) parsedInflow = '블로그';
+                else if (ct.includes('인터넷')||ct.includes('온라인')||ct.includes('쇼핑몰')||ct.includes('홈페이지')||ct.includes('웹')||ct.includes('카페')||ct.includes('검색')) parsedInflow = '인터넷';
+                else parsedInflow = '기타/오프라인';
+
+                return {
+                    id: Date.now() + idx + Math.random(),
+                    quoteNo: String(cleanRow[dateKey] || '').trim(),
+                    author: cleanRow[authorKey] || '미상', region: cleanRow[regionKey] || '미지정',
+                    customerType: customerType, source: source, date: cleanDate,
+                    company: cleanRow[companyKey] || '미지정', phone: cleanRow[phoneKey] || '-', 
+                    inflow: parsedInflow, items: cleanRow[itemsKey] || '-', amount: amountNum,
+                    status: cleanRow[statusKey] || (source === '단기' ? '단기가망고객' : '장기가망고객'),
+                    dueDate: cleanDueDate, history: history
+                };
+            });
+            allQuotes = allQuotes.filter(q => !(q.source === source && q.customerType === customerType));
+            allQuotes.push(...formatted);
+            showToast(`${customerType} ${source} 데이터 동기화 성공!`, 'success');
+            saveToLocalStorage(); updateLabels(); applyFiltersAndRender();
+        }
+
+        function updateLabels() {
+            document.getElementById('label-corp-short').textContent = `✅ 법인 단기 (${allQuotes.filter(q=>q.customerType==='법인'&&q.source==='단기').length}건)`;
+            document.getElementById('label-corp-long').textContent = `✅ 법인 장기 (${allQuotes.filter(q=>q.customerType==='법인'&&q.source==='장기').length}건)`;
+            document.getElementById('label-indiv-short').textContent = `✅ 개인 단기 (${allQuotes.filter(q=>q.customerType==='개인'&&q.source==='단기').length}건)`;
+            document.getElementById('label-indiv-long').textContent = `✅ 개인 장기 (${allQuotes.filter(q=>q.customerType==='개인'&&q.source==='장기').length}건)`;
+        }
+
+        function checkOverdue(dueDateStr) {
+            if (dueDateStr === '-' || !dueDateStr) return { isOverdue: false, days: 0 };
+            try {
+                const targetDate = new Date(dueDateStr);
+                if (isNaN(targetDate.getTime())) return { isOverdue: false, days: 0 };
+                const diffDays = Math.ceil((BASE_DATE.getTime() - targetDate.getTime()) / 86400000);
+                return { isOverdue: diffDays > 0, days: diffDays };
+            } catch (e) { return { isOverdue: false, days: 0 }; }
+        }
+
+        function summarizeContact(historyText, quoteDateStr) {
+            let diffDaysForSort = 999999;
+            if (!historyText) return { latestDate: '-', text: '기록 없음', elapsedText: '', diffDaysForSort };
+            const lines = String(historyText).split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length === 0) return { latestDate: '-', text: '내용 없음', elapsedText: '', diffDaysForSort };
+            const firstLine = lines[0]; const match = firstLine.match(/^(\d{1,4}[./-]\d{1,2}([./-]\d{1,2})?|\d{1,2}\.\d{1,2})[-:\s]*/);
+            let latestDate = '-'; let content = firstLine; let elapsedText = '';
+            if (match) { latestDate = match[1]; content = firstLine.substring(match[0].length).trim(); } else return { latestDate: '-', text: firstLine, elapsedText: '경과 미정', diffDaysForSort };
+            try {
+                let y = 2026; if (quoteDateStr) { const qy = parseInt(quoteDateStr.split('-')[0], 10); if (!isNaN(qy)) y = qy; }
+                const mdMatch = latestDate.match(/(\d{1,2})[./](\d{1,2})/);
+                if (mdMatch) {
+                    const cDate = new Date(y, parseInt(mdMatch[1], 10)-1, parseInt(mdMatch[2], 10));
+                    if (!isNaN(cDate.getTime())) {
+                        const diffDays = Math.floor((BASE_DATE.getTime() - cDate.getTime()) / 86400000);
+                        diffDaysForSort = diffDays;
+                        if (diffDays === 0) elapsedText = '오늘 연락'; else if (diffDays === 1) elapsedText = '어제 연락'; else if (diffDays > 1) elapsedText = `⚡ ${diffDays}일 전 연락`; else elapsedText = `${Math.abs(diffDays)}일 뒤 연락`;
+                    }
+                }
+            } catch (err) { }
+            return { latestDate, text: content, elapsedText, diffDaysForSort };
+        }
+
+        function getProductCategory(itemText) {
+            if (!itemText || itemText === '-') return '기타 제품군';
+            const txt = itemText.toLowerCase();
+            if (txt.includes('랩핑')) return '랩핑기 설비'; if (txt.includes('제함기')) return '제함기 설비';
+            if (txt.includes('컨베이어')||txt.includes('자바라')) return '컨베이어 시스템'; if (txt.includes('테이프')) return '박스테이프 소모품';
+            if (txt.includes('필름')) return '스트레치 필름'; if (txt.includes('밴딩기')) return '밴딩기 설비';
+            const cleanWord = (itemText.split(' ')[0] || '').replace(/[^가-힣a-zA-Z0-9]/g, ''); return cleanWord.length > 1 ? cleanWord : '기타 제품군';
+        }
+
+        function getInflowBadge(txt) {
+            txt = (txt || '기타/오프라인').trim(); let c = 'bg-slate-100 text-slate-700 border-slate-200';
+            if (txt === '블로그') c = 'bg-emerald-100 text-emerald-800 border-emerald-200'; 
+            else if (txt === '유튜브') c = 'bg-rose-100 text-rose-800 border-rose-200'; 
+            else if (txt === '당근') c = 'bg-amber-100 text-amber-800 border-amber-200'; 
+            else if (txt === '인터넷') c = 'bg-blue-100 text-blue-800 border-blue-200';
+            return `<span class="px-2 py-0.5 text-[10px] font-semibold rounded-full border ${c}">${txt}</span>`;
+        }
+
+        function calculateInflowSummary(dataset, containerId, prefix) {
+            const standardCategories = ['유튜브', '블로그', '당근', '인터넷', '기타/오프라인'];
+            const map = {}; let maxAmount = 1;
+            standardCategories.forEach(cat => { map[cat] = { amount: 0, count: 0, prods: {} }; });
+            dataset.forEach(q => {
+                let key = q.inflow || '기타/오프라인'; if (!standardCategories.includes(key)) key = '기타/오프라인';
+                let amt = isNaN(q.amount) ? 0 : q.amount; map[key].amount += amt; map[key].count++;
+                if(map[key].amount > maxAmount) maxAmount = map[key].amount;
+                let cat = getProductCategory(q.items); if(!map[key].prods[cat]) map[key].prods[cat] = {amt:0, cnt:0};
+                map[key].prods[cat].amt += amt; map[key].prods[cat].cnt++;
+            });
+            const container = document.getElementById(containerId); if(!container) return;
+            const keys = Object.keys(map).sort((a,b) => map[b].amount - map[a].amount);
+            container.innerHTML = keys.map((key, i) => {
+                const info = map[key]; const pct = Math.min(100, Math.max(5, Math.round((info.amount / Math.max(maxAmount, 100000)) * 100)));
+                let bc = 'bg-slate-400'; if(key==='유튜브') bc='bg-rose-500'; else if(key==='블로그') bc='bg-emerald-500'; else if(key==='당근') bc='bg-amber-500'; else if(key==='인터넷') bc='bg-blue-500';
+                const pKeys = Object.keys(info.prods).sort((a,b)=>info.prods[b].amt-info.prods[a].amt);
+                const pHtml = pKeys.map(pk => `<div class="flex justify-between py-2 text-xs border-b border-slate-100 last:border-0"><span class="font-bold">${pk} (${info.prods[pk].cnt}건)</span><span class="font-black">${info.prods[pk].amt.toLocaleString()}원</span></div>`).join('');
+                return `
+                    <div class="border border-slate-200 rounded-xl mb-3 overflow-hidden bg-white group">
+                        <div class="p-3.5 cursor-pointer bg-slate-50 transition-colors" onclick="toggleAccordion('${prefix}-${i}')">
+                            <div class="flex justify-between items-end mb-2"><span class="font-extrabold text-sm"><svg id="icon-${prefix}-${i}" class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> ${key} (${info.count}건)</span><span class="font-black text-lg">${info.amount.toLocaleString()}원</span></div>
+                            <div class="w-full bg-slate-200 h-2 rounded-full"><div class="${bc} h-2 rounded-full" style="width:${pct}%"></div></div>
+                        </div>
+                        <div id="content-${prefix}-${i}" class="accordion-content px-4 bg-slate-50">${pHtml}</div>
+                    </div>`;
+            }).join('');
+        }
+
+        function calculateProductSummary(dataset, containerId, prefix) {
+            const map = {}; let maxAmount = 1;
+            dataset.forEach(q => {
+                let cat = getProductCategory(q.items); if(!map[cat]) map[cat]={amt:0,cnt:0,months:{}};
+                let amt = isNaN(q.amount)?0:q.amount; map[cat].amt+=amt; map[cat].cnt++;
+                if(map[cat].amt>maxAmount) maxAmount=map[cat].amt;
+                let mk = '미정'; if(q.dueDate && q.dueDate!=='-') { let p=q.dueDate.split('-'); if(p.length>=2) mk=`${p[0].substring(2)}년 ${p[1]}월`; }
+                else if(q.date) { let p=q.date.split('-'); if(p.length>=2) mk=`${p[0].substring(2)}년 ${p[1]}월`; }
+                if(!map[cat].months[mk]) map[cat].months[mk]={amt:0,cnt:0};
+                map[cat].months[mk].amt+=amt; map[cat].months[mk].cnt++;
+            });
+            const keys = Object.keys(map).sort((a,b)=>map[b].amt-map[a].amt);
+            const container = document.getElementById(containerId); if(!container) return;
+            container.innerHTML = keys.map((key, i) => {
+                const info = map[key]; const pct = Math.min(100, Math.max(5, Math.round((info.amt / Math.max(maxAmount, 100000)) * 100)));
+                const mKeys = Object.keys(info.months).sort((a,b)=>a.localeCompare(b));
+                const mHtml = mKeys.map(mk => `<div class="flex justify-between py-2 text-xs border-b border-emerald-100 last:border-0"><span class="font-bold text-emerald-800">${mk} (${info.months[mk].cnt}건)</span><span class="font-black text-emerald-900">${info.months[mk].amt.toLocaleString()}원</span></div>`).join('');
+                return `
+                    <div class="border border-slate-200 rounded-xl mb-3 overflow-hidden bg-white">
+                        <div class="p-3.5 cursor-pointer bg-slate-50" onclick="toggleAccordion('${prefix}-${i}')">
+                            <div class="flex justify-between items-end mb-2"><span class="font-extrabold text-sm text-slate-800"><svg id="icon-${prefix}-${i}" class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> ${key} (${info.cnt}건)</span><span class="font-black text-emerald-600 text-lg">${info.amt.toLocaleString()}원</span></div>
+                            <div class="w-full bg-slate-200 h-2 rounded-full"><div class="bg-emerald-500 h-2 rounded-full" style="width:${pct}%"></div></div>
+                        </div>
+                        <div id="content-${prefix}-${i}" class="accordion-content px-4 bg-emerald-50/40">${mHtml}</div>
+                    </div>`;
+            }).join('');
+        }
+
+        function calculateMonthlyForecast(dataset) {
+            const map = {}; let maxAmount = 1;
+            dataset.forEach(q => {
+                let mk = '미정'; if(q.dueDate && q.dueDate!=='-') { let p=q.dueDate.split('-'); if(p.length>=2) mk=`${p[0].substring(2)}년 ${p[1]}월`; }
+                if(!map[mk]) map[mk]={amt:0,cnt:0,prods:{}};
+                let amt = isNaN(q.amount)?0:q.amount; map[mk].amt+=amt; map[mk].cnt++;
+                if(map[mk].amt>maxAmount) maxAmount=map[mk].amt;
+                let cat = getProductCategory(q.items); if(!map[mk].prods[cat]) map[mk].prods[cat]={amt:0,cnt:0};
+                map[mk].prods[cat].amt+=amt; map[mk].prods[cat].cnt++;
+            });
+            const keys = Object.keys(map).sort((a,b)=> a.includes('미정')?1:b.includes('미정')?-1:a.localeCompare(b));
+            const container = document.getElementById('forecast-month-list'); if(!container) return;
+            container.innerHTML = keys.map((key, i) => {
+                const info = map[key]; const pct = Math.min(100, Math.max(5, Math.round((info.amt / Math.max(maxAmount, 100000)) * 100)));
+                const pKeys = Object.keys(info.prods).sort((a,b)=>info.prods[b].amt-info.prods[a].amt);
+                const pHtml = pKeys.map(pk => `<div class="flex justify-between py-2 text-xs border-b border-indigo-100 last:border-0"><span class="font-bold text-indigo-800">${pk} (${info.prods[pk].cnt}건)</span><span class="font-black text-indigo-900">${info.prods[pk].amt.toLocaleString()}원</span></div>`).join('');
+                return `
+                    <div class="border border-slate-200 rounded-xl mb-3 overflow-hidden bg-white">
+                        <div class="p-3.5 cursor-pointer bg-slate-50" onclick="toggleAccordion('month-${i}')">
+                            <div class="flex justify-between items-end mb-2"><span class="font-extrabold text-sm"><svg id="icon-month-${i}" class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg> ${key} (${info.cnt}건)</span><span class="font-black text-indigo-600 text-lg">${info.amt.toLocaleString()}원</span></div>
+                            <div class="w-full bg-slate-200 h-2 rounded-full"><div class="bg-indigo-500 h-2 rounded-full" style="width:${pct}%"></div></div>
+                        </div>
+                        <div id="content-month-${i}" class="accordion-content px-4 bg-indigo-50/40">${pHtml}</div>
+                    </div>`;
+            }).join('');
+        }
+
+        window.changeCustomerFilter = function(f) {
+            currentCustType = f; ['btn-cust-all','btn-cust-corp','btn-cust-indiv'].forEach(id => document.getElementById(id).className="px-4 py-1.5 text-xs font-bold rounded-md text-slate-500");
+            document.getElementById(f==='all'?'btn-cust-all':(f==='법인'?'btn-cust-corp':'btn-cust-indiv')).className="px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm";
+            applyFiltersAndRender();
+        }
+        window.changeSalesLocalTab = function(t) {
+            currentSalesTab = t; ['all','short','long','overdue'].forEach(id => document.getElementById(`tab-${id}`).className=id==='overdue'?"px-4 py-1.5 text-xs font-black rounded-md text-rose-500":"px-4 py-1.5 text-xs font-bold rounded-md text-slate-500");
+            const el = document.getElementById(`tab-${t}`); el.className = t==='overdue'?"px-4 py-1.5 text-xs font-black rounded-md bg-rose-100 text-rose-800 shadow-sm":"px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm";
+            applyFiltersAndRender();
+        }
+        window.handleSearch = function() { applyFiltersAndRender(); }
+        window.handleSort = function(k) {
+            if(sortConfig.key === k) sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+            else { sortConfig.key = k; sortConfig.direction = (k === 'amount'||k==='contact'||k==='date') ? 'desc' : 'asc'; }
+            applyFiltersAndRender();
+        }
+
+        function applyFiltersAndRender() {
+            const sq = document.getElementById('search-input').value.toLowerCase().trim();
+            const authors = [...new Set(allQuotes.map(q => q.author))].filter(a => a && a!=='미상').sort();
+            let authHtml = `<option value="all">모든 담당자</option>`; authors.forEach(a => authHtml+=`<option value="${a}">${a}</option>`);
+            const sel = document.getElementById('author-filter'); const curA = sel.value; sel.innerHTML = authHtml; if(authors.includes(curA)) sel.value = curA;
+            const aq = sel.value;
+
+            filteredQuotes = allQuotes.filter(q => {
+                if (currentCustType !== 'all' && q.customerType !== currentCustType) return false;
+                if (currentSalesTab === 'short' && q.source !== '단기') return false;
+                if (currentSalesTab === 'long' && q.source !== '장기') return false;
+                if (currentSalesTab === 'overdue' && !checkOverdue(q.dueDate).isOverdue) return false;
+                if (aq !== 'all' && q.author !== aq) return false;
+                if (sq) return q.company.toLowerCase().includes(sq) || q.items.toLowerCase().includes(sq) || q.history.toLowerCase().includes(sq) || q.phone.includes(sq);
+                return true;
+            });
+
+            let tAmt=0, oCnt=0, rCnt=0, cCnt=0, iCnt=0;
+            filteredQuotes.forEach(q => {
+                tAmt += isNaN(q.amount) ? 0 : q.amount;
+                if(q.customerType === '법인') cCnt++; if(q.customerType === '개인') iCnt++;
+                if(checkOverdue(q.dueDate).isOverdue) oCnt++;
+                const s = summarizeContact(q.history, q.date);
+                if(s.latestDate!=='-') {
+                    const m = s.latestDate.match(/(\d{1,2})[./](\d{1,2})/);
+                    if(m){ const cd = new Date(parseInt(q.date.split('-')[0])||2026, parseInt(m[1])-1, parseInt(m[2])); if(!isNaN(cd.getTime())){ if(Math.floor((BASE_DATE.getTime()-cd.getTime())/86400000)<=7) rCnt++; } }
+                }
+            });
+
+            document.getElementById('stat-total-count').textContent = filteredQuotes.length; document.getElementById('stat-total-amount').textContent = tAmt.toLocaleString();
+            document.getElementById('stat-overdue-count').textContent = oCnt; document.getElementById('stat-recent-contact-count').textContent = rCnt;
+            document.getElementById('stat-ratio-summary').textContent = `법인 ${cCnt}건 / 개인사업자 ${iCnt}건`;
+            document.getElementById('stat-recent-contact-ratio').textContent = `선택 분류 내 소통비율: ${filteredQuotes.length>0 ? Math.round((rCnt/filteredQuotes.length)*100) : 0}%`;
+
+            calculateMonthlyForecast(filteredQuotes); 
+            calculateProductSummary(filteredQuotes, 'product-summary-list', 'prod'); 
+            calculateInflowSummary(filteredQuotes, 'inflow-summary-list', 'inflow');
+            updateSuccessRatioCard();
+
+            filteredQuotes.sort((a,b) => {
+                let vA = a[sortConfig.key], vB = b[sortConfig.key];
+                if(sortConfig.key === 'type') { vA = a.customerType+a.source; vB = b.customerType+b.source; }
+                if(sortConfig.key === 'contact') { vA = summarizeContact(a.history, a.date).diffDaysForSort; vB = summarizeContact(b.history, b.date).diffDaysForSort; }
+                if(vA === vB) return 0;
+                if(sortConfig.key === 'amount' || sortConfig.key === 'contact') return sortConfig.direction === 'asc' ? vA-vB : vB-vA;
+                return sortConfig.direction === 'asc' ? (vA<vB ? -1 : 1) : (vA>vB ? -1 : 1);
+            });
+
+            ['date','type','author','region','company','phone','inflow','items','amount','status','dueDate','contact'].forEach(k => {
+                const el = document.getElementById(`sort-icon-${k}`); if(el) el.innerHTML = (sortConfig.key===k) ? (sortConfig.direction==='asc'?'▲':'▼') : '↕';
+            });
+
+            const tbody = document.getElementById('table-body');
+            if(filteredQuotes.length === 0) { tbody.innerHTML = `<tr><td colspan="12" class="p-10 text-center text-slate-400">데이터가 없습니다.</td></tr>`; return; }
+
+            tbody.innerHTML = filteredQuotes.map(q => {
+                const ov = checkOverdue(q.dueDate); const ci = summarizeContact(q.history, q.date);
+                const tBadge = q.customerType === '법인' ? `<span class="px-1.5 py-0.5 text-[9px] font-black rounded bg-indigo-50 text-indigo-700">🏢 법인</span>` : `<span class="px-1.5 py-0.5 text-[9px] font-black rounded bg-amber-50 text-amber-700">👤 개인</span>`;
+                const dBadge = q.source === '단기' ? `<span class="px-1.5 py-0.5 text-[9px] font-black rounded bg-slate-100 text-slate-700">단기</span>` : `<span class="px-1.5 py-0.5 text-[9px] font-black rounded bg-teal-50 text-teal-700">장기</span>`;
+                let eBadge = ""; if(ci.elapsedText){ let c="bg-slate-100 text-slate-500"; if(ci.elapsedText.includes('방치')||ci.elapsedText.includes('전 연락')&&parseInt(ci.elapsedText.replace(/[^0-9]/g,''))>=7) c="bg-rose-600 text-white animate-pulse"; else if(ci.elapsedText.includes('오늘')) c="bg-blue-100 text-blue-800"; eBadge=`<span class="px-2 py-0.5 text-[9px] rounded font-bold ${c} ml-auto">${ci.elapsedText}</span>`; }
+                
+                return `
+                    <tr class="hover:bg-slate-50 cursor-pointer border-b border-slate-100 font-medium text-slate-700" onclick="window.openModal('${q.id}')">
+                        <td class="p-3 font-mono text-slate-500 text-[11px]"><div>${q.date}</div><div class="text-[10px] text-indigo-500 font-bold mt-0.5">${getQuoteSuffix(q.quoteNo)}</div></td>
+                        <td class="p-3 text-center"><div class="flex flex-col gap-1 items-center">${tBadge}${dBadge}</div></td>
+                        <td class="p-3 text-center font-bold text-slate-700">${q.author}</td>
+                        <td class="p-3 text-center font-bold text-slate-600">${q.region}</td>
+                        <td class="p-3 font-black text-slate-900">${q.company}</td>
+                        <td class="p-3 font-mono text-slate-600">${q.phone}</td>
+                        <td class="p-3 text-center">${getInflowBadge(q.inflow)}</td>
+                        <td class="p-3 text-slate-700 truncate max-w-[180px]" title="${q.items}">${q.items}</td>
+                        <td class="p-3 text-right font-black text-slate-900">${(isNaN(q.amount)?0:q.amount).toLocaleString()}원</td>
+                        <td class="p-3 text-center"><span class="px-2 py-1 text-[10px] font-bold rounded-full bg-slate-100 text-slate-700">${q.status}</span></td>
+                        <td class="p-3 text-center font-bold ${ov.isOverdue?'text-rose-600':'text-slate-700'}">${q.dueDate}${ov.isOverdue?`<br><span class="text-[9px] text-rose-500">⚠️${ov.days}일지남</span>`:''}</td>
+                        <td class="p-3 text-xs text-slate-600"><div class="flex items-center gap-2"><span class="truncate max-w-[150px] font-medium">${ci.text}</span>${eBadge}</div></td>
+                    </tr>`;
+            }).join('');
+        }
+
+        window.openModal = function(id) {
+            let item = allQuotes.find(q => String(q.id) === String(id));
+            let isResult = false;
+            
+            if (!item) {
+                item = allResultData.find(q => String(q.id) === String(id));
+                if (item) isResult = true;
+            }
+            if (!item) return;
+
+            document.getElementById('modal-title').textContent = item.company; 
+            document.getElementById('modal-date').textContent = item.date; 
+            document.getElementById('modal-author').textContent = item.author || '-'; 
+            
+            document.getElementById('modal-amount').textContent = `${(isNaN(item.amount)?0:item.amount).toLocaleString()}원`; 
+            document.getElementById('modal-items').textContent = item.items; 
+            document.getElementById('modal-phone').textContent = item.phone || '-'; 
+            document.getElementById('modal-inflow').innerHTML = getInflowBadge(item.inflow);
+            
+            const tBadge = document.getElementById('modal-badge-type'); 
+            const mBadge = document.getElementById('modal-badge-term');
+
+            if (!isResult) {
+                document.getElementById('modal-region').textContent = item.region || '미지정';
+                document.getElementById('modal-delivery-container').classList.remove('hidden');
+                document.getElementById('modal-delivery').textContent = item.dueDate || '-';
+                document.getElementById('modal-history-container').classList.remove('hidden');
+
+                if(tBadge) { 
+                    tBadge.classList.remove('hidden');
+                    tBadge.textContent = item.customerType; 
+                    tBadge.className = `px-2 py-0.5 text-[10px] font-bold rounded-full ${item.customerType === '법인' ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'}`; 
+                }
+                if(mBadge) { 
+                    mBadge.classList.remove('hidden');
+                    mBadge.textContent = item.source + '가망'; 
+                    mBadge.className = `px-2 py-0.5 text-[10px] font-bold rounded-full ${item.source === '단기' ? 'bg-slate-200 text-slate-800' : 'bg-teal-100 text-teal-800'}`; 
+                }
+
+                const hist = document.getElementById('modal-history');
+                if (!item.history) hist.innerHTML = '<p class="text-xs text-slate-400">기록 없음</p>';
+                else { hist.innerHTML = String(item.history).split('\n').filter(Boolean).map(l => { const m = l.match(/^(\d{1,4}[./-]\d{1,2}([./-]\d{1,2})?|\d{1,2}\.\d{1,2})[-:\s]*/); return `<div class="relative pl-4 pb-2 border-b border-slate-50 last:border-0"><span class="inline-block px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-600 mb-1">${m?m[1]:'기록'}</span><p class="text-xs text-slate-700 font-medium leading-relaxed">${m?l.substring(m[0].length):l}</p></div>`; }).join(''); }
+            } else {
+                document.getElementById('modal-region').innerHTML = item.kind === 'success' ? '<span class="text-emerald-600 font-bold">✅ 수주성공</span>' : '<span class="text-rose-600 font-bold">❌ 수주실패</span>';
+                document.getElementById('modal-delivery-container').classList.add('hidden');
+                
+                if (item.resultText) {
+                    document.getElementById('modal-history-container').classList.remove('hidden');
+                    document.getElementById('modal-history-title').textContent = '📝 견적/결과 상세 내용';
+                    document.getElementById('modal-history').innerHTML = `<div class="text-xs text-slate-700 font-medium leading-relaxed">${item.resultText}</div>`;
+                } else {
+                    document.getElementById('modal-history-container').classList.add('hidden');
+                }
+
+                if(tBadge) tBadge.classList.add('hidden');
+                if(mBadge) mBadge.classList.add('hidden');
+            }
+            
+            document.getElementById('detail-modal').classList.remove('hidden'); 
+            setTimeout(() => { document.getElementById('modal-container').classList.remove('scale-95', 'opacity-0'); }, 10);
+        }
+        
+        window.closeModal = function() {
+            document.getElementById('modal-container').classList.add('scale-95', 'opacity-0'); setTimeout(() => { document.getElementById('detail-modal').classList.add('hidden'); }, 300);
+        }
+
+        window.exportToCSV = function() {
+            if(filteredQuotes.length===0){ showToast('데이터가 없습니다.','error'); return; }
+            let csv = "\uFEFF고객유형,기간구분,일자,작성자,지역,거래처명,고객연락처,인입경로,품목,금액,진행상태,수주예상일,연락일,이력\r\n";
+            filteredQuotes.forEach(q => { const ci = summarizeContact(q.history, q.date); csv += `${q.customerType},${q.source},${q.date},${q.author},${q.region},"${q.company}","${q.phone}","${q.inflow}","${q.items}",${isNaN(q.amount)?0:q.amount},${q.status},${q.dueDate},${ci.latestDate},"${ci.text.replace(/"/g,'""')}"\r\n`; });
+            const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'})); link.download = `영업통계.csv`; link.click();
+        }
+
+        /* ================= 수주결과(성공/실패) 파싱 & 렌더링 ================= */
+        window.handleResultFileSelect = function(event, kind) {
+            const file = event.target.files[0]; if (!file) return;
+            if (!file.name.toLowerCase().endsWith('.csv')) { showToast('CSV 파일만 지원합니다.', 'error'); return; }
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                let buffer = e.target.result;
+                let text = new TextDecoder('utf-8').decode(buffer);
+                if (!/[가-힣]/.test(text)) text = new TextDecoder('euc-kr').decode(buffer);
+                let headerIndex = text.indexOf("일자-No.");
+                if (headerIndex !== -1) { let lastNewline = text.lastIndexOf('\n', headerIndex); text = text.substring(lastNewline === -1 ? 0 : lastNewline + 1); }
+                Papa.parse(text, { header: true, skipEmptyLines: 'greedy', complete: function(results) { processResultRows(results.data, kind); } });
+            }; reader.readAsArrayBuffer(file);
+        };
+
+        function processResultRows(rows, kind) {
+            if (rows.length === 0) return;
+            const mapped = rows.filter(r => {
+                const company = r['거래처명'] || r['거래처'] || '';
+                return company && company !== '거래처명';
+            }).map((r, idx) => {
+                const rawDate = r['일자-No.'] || r['일자'] || '';
+                const datePart = String(rawDate).trim().split(' ')[0].replace(/\//g,'-');
+                
+                let rawInflow = r['유입경로'] || '';
+                let inflow = '기타/오프라인';
+                const ct = rawInflow.toLowerCase();
+                if (ct.includes('유튜브')||ct.includes('youtube')) inflow='유튜브';
+                else if (ct.includes('당근')) inflow='당근';
+                else if (ct.includes('블로그')||ct.includes('blog')) inflow='블로그';
+                else if (ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
+                else if (rawInflow.trim()) inflow = rawInflow.trim();
+                
+                return {
+                    id: 'res_' + Date.now() + idx + Math.random(),
+                    kind: kind,
+                    date: datePart,
+                    company: r['거래처명'] || r['거래처'] || '-',
+                    inflow: inflow,
+                    phone: r['고객연락처'] || '-',
+                    author: r['작성자'] || r['기안자'] || '-',
+                    items: r['품목명(요약)'] || r['품목명'] || r['견적명'] || '-',
+                    amount: parseAmount(r['금액합계(VAT포함)'] || r['금액합계'] || r['금액'] || '0'),
+                    resultText: r['견적결과(보고)'] || r['견적결과'] || '-'
+                };
+            });
+
+            allResultData = allResultData.filter(r => r.kind !== kind);
+            allResultData.push(...mapped);
+            
+            updateResultLabels('success');
+            updateResultLabels('fail');
+            renderResultTable();
+            updateSuccessRatioCard();
+            saveToLocalStorage();
+            showToast(`수주${kind==='success'?'성공':'실패'} 데이터 ${mapped.length}건 업로드 완료!`, 'success');
+        }
+
+        function updateResultLabels(kind) {
+            const data = allResultData.filter(r => r.kind === kind);
+            const count = data.length;
+            const totalAmount = data.reduce((sum, r) => sum + (isNaN(r.amount) ? 0 : r.amount), 0);
+
+            if (kind === 'success') {
+                document.getElementById('label-success').innerHTML = `
+                    <span class="text-sm font-bold text-slate-700">✅ 수주성공 CSV 등록</span>
+                    <br>
+                    <span class="text-lg text-emerald-600 font-black mt-1 inline-block">(${count}건 / ${totalAmount.toLocaleString()}원)</span>
+                `;
+            } else {
+                document.getElementById('label-fail').innerHTML = `
+                    <span class="text-sm font-bold text-slate-700">❌ 수주실패 CSV 등록</span>
+                    <br>
+                    <span class="text-lg text-rose-600 font-black mt-1 inline-block">(${count}건 / ${totalAmount.toLocaleString()}원)</span>
+                `;
+            }
+        }
+
+        function updateSuccessRatioCard() {
+            const successData = allResultData.filter(r => r.kind === 'success');
+            const failData = allResultData.filter(r => r.kind === 'fail');
+
+            const sc = successData.length;
+            const sa = successData.reduce((sum, r) => sum + (isNaN(r.amount)?0:r.amount), 0);
+
+            const fc = failData.length;
+            const fa = failData.reduce((sum, r) => sum + (isNaN(r.amount)?0:r.amount), 0);
+
+            const pc = allQuotes.length;
+            const pa = allQuotes.reduce((sum, r) => sum + (isNaN(r.amount)?0:r.amount), 0);
+
+            const totalCount = sc + fc + pc;
+            const totalAmt = sa + fa + pa;
+
+            document.getElementById('sr-total').textContent = totalCount;
+            document.getElementById('sr-total-amt').textContent = totalAmt.toLocaleString() + '원';
+            
+            document.getElementById('sr-success').textContent = sc;
+            document.getElementById('sr-success-amt').textContent = sa.toLocaleString() + '원';
+            
+            document.getElementById('sr-fail').textContent = fc;
+            document.getElementById('sr-fail-amt').textContent = fa.toLocaleString() + '원';
+            
+            document.getElementById('sr-pending').textContent = pc;
+            document.getElementById('sr-pending-amt').textContent = pa.toLocaleString() + '원';
+
+            const sp = totalCount > 0 ? Math.round(sc/totalCount*100) : 0;
+            const fp = totalCount > 0 ? Math.round(fc/totalCount*100) : 0;
+            const pp = totalCount > 0 ? Math.round(pc/totalCount*100) : 0;
+
+            document.getElementById('sr-success-pct').textContent = sp + '%';
+            document.getElementById('sr-fail-pct').textContent = fp + '%';
+            document.getElementById('sr-pending-pct').textContent = pp + '%';
+            
+            document.getElementById('sr-success-bar').style.width = sp + '%';
+            document.getElementById('sr-fail-bar').style.width = fp + '%';
+            document.getElementById('sr-pending-bar').style.width = pp + '%';
+
+            // 버튼 내 금액 및 건수 업데이트
+            const allResCount = sc + fc;
+            const allResAmt = sa + fa;
+            
+            const elAll = document.getElementById('btn-text-all');
+            const elSuccess = document.getElementById('btn-text-success');
+            const elFail = document.getElementById('btn-text-fail');
+
+            if(elAll) elAll.textContent = `(${allResCount}건 / ${allResAmt.toLocaleString()}원)`;
+            if(elSuccess) elSuccess.textContent = `(${sc}건 / ${sa.toLocaleString()}원)`;
+            if(elFail) elFail.textContent = `(${fc}건 / ${fa.toLocaleString()}원)`;
+        }
+
+        window.changeResultFilter = function(f) {
+            resultFilterType = f;
+            ['btn-result-all', 'btn-result-success', 'btn-result-fail'].forEach(id => {
+                document.getElementById(id).className = "px-4 py-1.5 text-xs font-bold rounded-md text-slate-500 flex items-center gap-1 transition-all hover:bg-slate-200/50";
+            });
+            const targetId = f === 'all' ? 'btn-result-all' : (f === 'success' ? 'btn-result-success' : 'btn-result-fail');
+            document.getElementById(targetId).className = "px-4 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm flex items-center gap-1 transition-all border border-slate-200/60";
+            
+            renderResultTable();
+        }
+
+        window.handleResultSort = function(key) {
+            if (resultSort.key === key) resultSort.direction = resultSort.direction === 'asc' ? 'desc' : 'asc';
+            else { resultSort.key = key; resultSort.direction = (key === 'amount' || key === 'date') ? 'desc' : 'asc'; }
+            renderResultTable();
+        };
+
+        window.renderResultTable = function() {
+            const sq = (document.getElementById(`search-result`)?.value || '').toLowerCase().trim();
+            const authors = [...new Set(allResultData.map(r => r.author))].filter(a => a && a !== '-').sort();
+            const sel = document.getElementById(`author-filter-result`);
+            
+            if (sel) {
+                const curA = sel.value;
+                let authHtml = `<option value="all">모든 작성자</option>`; 
+                authors.forEach(a => authHtml += `<option value="${a}">${a}</option>`);
+                sel.innerHTML = authHtml; 
+                if (authors.includes(curA)) sel.value = curA;
+            }
+            const aq = sel ? sel.value : 'all';
+
+            // 1. 필터링 로직 적용
+            let disp = allResultData.filter(r => {
+                if (resultFilterType !== 'all' && r.kind !== resultFilterType) return false;
+                if (aq !== 'all' && r.author !== aq) return false;
+                if (sq) return r.company.toLowerCase().includes(sq) || r.items.toLowerCase().includes(sq) || r.author.toLowerCase().includes(sq) || r.inflow.toLowerCase().includes(sq);
+                return true;
+            });
+
+            // 2. 필터링된 disp 데이터를 기준으로 요약 리스트 계산
+            calculateProductSummary(disp, 'result-product-summary-list', 'res-prod');
+            calculateInflowSummary(disp, 'result-inflow-summary-list', 'res-inflow');
+
+            // 요약 제목 동적 변경
+            const prodTitle = document.getElementById('result-prod-title');
+            const inflowTitle = document.getElementById('result-inflow-title');
+            let prefix = "전체";
+            if(resultFilterType === 'success') prefix = "✅ 성공";
+            if(resultFilterType === 'fail') prefix = "❌ 실패";
+            
+            if(prodTitle) prodTitle.textContent = `📦 품목별 ${prefix} 수주결과 성과`;
+            if(inflowTitle) inflowTitle.textContent = `📣 유입 채널별 ${prefix} 수주결과 성과`;
+
+            // 3. 테이블 정렬 및 렌더링 로직
+            disp.sort((a, b) => {
+                let vA = a[resultSort.key], vB = b[resultSort.key];
+                if (resultSort.key === 'amount') { vA = isNaN(a.amount)?0:a.amount; vB = isNaN(b.amount)?0:b.amount; }
+                if (vA === vB) return 0;
+                if (resultSort.key === 'amount') return resultSort.direction === 'asc' ? vA - vB : vB - vA;
+                return resultSort.direction === 'asc' ? (vA < vB ? -1 : 1) : (vA > vB ? -1 : 1);
+            });
+
+            const cols = ['date','company','inflow','phone','author','items','amount','resultText'];
+            cols.forEach(k => { const el = document.getElementById(`sort-result-${k}`); if(el) el.innerHTML = (resultSort.key===k)?(resultSort.direction==='asc'?'▲':'▼'):'↕'; });
+
+            const tbody = document.getElementById(`table-body-result`);
+            if (!tbody) return;
+            if (disp.length === 0) { tbody.innerHTML = `<tr><td colspan="9" class="p-10 text-center text-slate-400">데이터가 없습니다.</td></tr>`; return; }
+
+            tbody.innerHTML = disp.map(r => {
+                const badge = r.kind === 'success' ? `<span class="px-2 py-1 text-[10px] font-black rounded-full bg-emerald-100 text-emerald-700">성공</span>` : `<span class="px-2 py-1 text-[10px] font-black rounded-full bg-rose-100 text-rose-700">실패</span>`;
+                return `
+                <tr class="border-b border-slate-100 hover:bg-slate-50 text-slate-700 cursor-pointer" onclick="window.openModal('${r.id}')">
+                    <td class="p-3 text-center">${badge}</td>
+                    <td class="p-3 font-mono text-slate-600 text-[11px] whitespace-nowrap">${r.date}</td>
+                    <td class="p-3 font-black text-slate-900">${r.company}</td>
+                    <td class="p-3 text-center">${getInflowBadge(r.inflow)}</td>
+                    <td class="p-3 font-mono text-slate-600">${r.phone}</td>
+                    <td class="p-3 text-center font-bold text-slate-700">${r.author}</td>
+                    <td class="p-3 text-slate-700 max-w-[200px] truncate" title="${r.items}">${r.items}</td>
+                    <td class="p-3 text-right font-black text-slate-900">${(isNaN(r.amount)?0:r.amount).toLocaleString()}원</td>
+                    <td class="p-3 text-slate-600 text-[11px] max-w-[200px] truncate" title="${r.resultText}">${r.resultText}</td>
+                </tr>`
+            }).join('');
+        };
+
+        /* ================= 채권 관리 파싱 ================= */
+        function calculateArDueDate(baseDateStr, condition) {
+            if (!condition) return null;
+            if (condition.includes("입금후") || condition.includes("선결제") || condition.includes("계약금") || condition.includes("잔금") || condition.includes("수시")) return "즉시결제";
+            let d = new Date(baseDateStr); let m = d.getMonth(); let y = d.getFullYear();
+            let am = condition.match(/마감후\s*(\d+)일/); if(am) { let e = new Date(y, m+1, 0); e.setDate(e.getDate()+parseInt(am[1])); return e; }
+            if (condition.includes("익익월")||condition.includes("차차월")||condition.includes("2개월")) m+=2; else if (condition.includes("익월")||condition.includes("차월")||condition.includes("1개월")) m+=1; else if (condition.includes("당월")||condition.includes("이번달")||condition.includes("0개월")) m+=0; else return null;
+            if (condition.includes("말")) return new Date(y, m+1, 0);
+            let md = condition.match(/(\d+)일/); return md ? new Date(y, m, parseInt(md[1])) : new Date(y, m+1, 0);
+        }
+
+        window.handleArFileSelect = function(e, typeLabel) {
+            const f = e.target.files[0]; if(!f || !f.name.toLowerCase().endsWith('.csv')) { showToast('CSV 파일만 지원합니다.', 'error'); return; }
+            const rEuc = new FileReader();
+            rEuc.onload = function(e1) {
+                let txt = e1.target.result;
+                if(txt.indexOf("거래처")===-1 && txt.indexOf("잔액")===-1) { const rUtf = new FileReader(); rUtf.onload = e2 => parseArCsv(e2.target.result, typeLabel); rUtf.readAsText(f, "utf-8"); }
+                else parseArCsv(txt, typeLabel);
+            }; rEuc.readAsText(f, "euc-kr");
+        }
+
+        function parseArCsv(text, typeLabel) {
+            const lines = text.split('\n'); let hIdx = 0;
+            for (let j = 0; j < Math.min(20, lines.length); j++) { if (lines[j].includes("거래처") && lines[j].includes("잔액")) { hIdx = j; break; } }
+            Papa.parse(lines.slice(hIdx).join('\n'), {
+                header: true, skipEmptyLines: true,
+                complete: function(res) {
+                    const mapped = res.data.filter(r => r['거래처명'] && !r['거래처명'].includes('계')).map(r => ({
+                        type: typeLabel, manager: r['담당자명']||'', company: r['거래처명'],
+                        balance: parseFloat((r['잔액']||"0").replace(/,/g, ''))||0,
+                        condition: r['결제조건']||r['결제조건(채권)']||r['결제조건(채권) ']||"",
+                        memo: r['관리자수금메모(채권)']||r['관리자수금메모']||r['관리자수금메모(채권) ']||"",
+                        uncol: parseInt((r['미회수월']||"0").replace(/[^0-9]/g, '')) || 0
+                    }));
+                    allArData = allArData.filter(a => a.type !== typeLabel); allArData.push(...mapped);
+                    updateArLabels(); saveToLocalStorage(); renderArTable(); showToast(`${typeLabel} 채권 업로드 완료!`, 'success');
+                }
+            });
+        }
+
+        function updateArLabels() {
+            document.getElementById('label-ar-corp').textContent = `🏢 법인 채권 (${allArData.filter(a=>a.type==='법인').length}건)`;
+            document.getElementById('label-ar-indiv').textContent = `👤 개인 채권 (${allArData.filter(a=>a.type==='개인').length}건)`;
+        }
+
+        window.changeArFilter = function(f) {
+            arFilterType = f;
+            document.getElementById('ar-btn-all').className = f==='all' ? "px-5 py-1.5 text-xs font-bold rounded-md bg-white text-slate-800 shadow-sm" : "px-5 py-1.5 text-xs font-bold rounded-md text-slate-500";
+            document.getElementById('ar-btn-warning').className = f==='warning' ? "px-5 py-1.5 text-xs font-bold rounded-md bg-rose-50 text-rose-700 shadow-sm" : "px-5 py-1.5 text-xs font-bold rounded-md text-rose-500";
+            renderArTable();
+        }
+
+        window.handleArSort = function(k) {
+            if(arSort.key === k) arSort.direction = arSort.direction === 'asc' ? 'desc' : 'asc';
+            else { arSort.key = k; arSort.direction = (k === 'balance') ? 'desc' : 'asc'; }
+            renderArTable();
+        }
+
+        window.renderArTable = function() {
+            let sq = document.getElementById('search-input-ar').value.toLowerCase().trim();
+            const authors = [...new Set(allArData.map(a => a.manager))].filter(a => a).sort();
+            let authHtml = `<option value="all">모든 담당자</option>`; authors.forEach(a => authHtml+=`<option value="${a}">${a}</option>`);
+            const sel = document.getElementById('author-filter-ar'); if(!sel) return; const curA = sel.value; sel.innerHTML = authHtml; if(authors.includes(curA)) sel.value = curA;
+            const aq = sel.value;
+
+            CHECK_DATE.setHours(0,0,0,0); let tAmt = 0, oCnt = 0;
+
+            let disp = allArData.map(r => {
+                let dObj = calculateArDueDate(BASE_DATE_STR, r.condition);
+                let dStr = "", st = "", warn = false;
+                if(r.balance > 0) tAmt += r.balance;
+
+                if (r.balance <= 0) {
+                    dStr = "-"; st = "🟢 완납";
+                } else if (r.condition.includes("입금후") || r.condition.includes("선결제") || r.condition.includes("계약금")) {
+                    dStr = "즉시결제"; st = "🚨 문제(미입금)"; warn = true; oCnt++;
+                } else {
+                    if (dObj) dStr = `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,'0')}-${String(dObj.getDate()).padStart(2,'0')}`; else dStr = "계산불가";
+                    let u = r.uncol;
+                    if (r.condition.includes("익익월") || r.condition.includes("차차월") || r.condition.includes("2개월")) {
+                        if (u >= 3) { st = `❌ 연체(${u}개월)`; warn = true; oCnt++; } else st = "🟡 정상(기한내)";
+                    } else if (r.condition.includes("익월") || r.condition.includes("차월") || r.condition.includes("1개월")) {
+                        if (u >= 2) { st = `❌ 연체(${u}개월)`; warn = true; oCnt++; } else st = "🟡 정상(기한내)";
+                    } else {
+                        if (u >= 1) { st = `❌ 연체(${u}개월)`; warn = true; oCnt++; } else st = "🟡 정상(기한내)";
+                    }
+                }
+                return { ...r, dueDateObj: dObj, dueDateStr: dStr, status: st, isWarning: warn };
+            }).filter(r => {
+                if (arFilterType === 'warning' && !r.isWarning) return false;
+                if (aq !== 'all' && r.manager !== aq) return false;
+                if (sq) return r.company.toLowerCase().includes(sq) || r.condition.toLowerCase().includes(sq) || r.memo.toLowerCase().includes(sq);
+                return true;
+            });
+
+            document.getElementById('ar-summary-amount').textContent = tAmt.toLocaleString(); document.getElementById('ar-summary-count').textContent = oCnt.toLocaleString();
+
+            disp.sort((a, b) => {
+                let vA = a[arSort.key], vB = b[arSort.key];
+                if (arSort.key === 'dueDate') { vA = (a.dueDateObj instanceof Date) ? a.dueDateObj.getTime() : (a.dueDateStr==="즉시결제"?0:9999999999999); vB = (b.dueDateObj instanceof Date) ? b.dueDateObj.getTime() : (b.dueDateStr==="즉시결제"?0:9999999999999); }
+                if (vA === vB) return 0;
+                if (arSort.key === 'balance') return arSort.direction === 'asc' ? vA - vB : vB - vA;
+                return arSort.direction === 'asc' ? (vA < vB ? -1 : 1) : (vA > vB ? -1 : 1);
+            });
+
+            ['type','manager','company','balance','condition','dueDate','status','memo'].forEach(k => { const el = document.getElementById(`sort-ar-${k}`); if(el) el.innerHTML = (arSort.key===k)?(arSort.direction==='asc'?'▲':'▼'):'↕'; });
+
+            const tbody = document.getElementById('table-body-ar');
+            if(disp.length===0) { tbody.innerHTML = `<tr><td colspan="8" class="p-10 text-center text-slate-400">데이터가 없습니다.</td></tr>`; return; }
+
+            tbody.innerHTML = disp.map(r => `
+                <tr class="border-b border-slate-100 ${r.isWarning ? 'bg-rose-50/30' : 'hover:bg-slate-50'} text-slate-700">
+                    <td class="p-3 text-center"><span class="px-2 py-0.5 text-[10px] font-black rounded ${r.type==='법인'?'bg-indigo-50 text-indigo-700':'bg-amber-50 text-amber-700'}">${r.type}</span></td>
+                    <td class="p-3 text-center font-bold text-slate-700">${r.manager}</td>
+                    <td class="p-3 font-black text-slate-900">${r.company}</td>
+                    <td class="p-3 text-right font-black ${r.balance>0?'text-slate-900':'text-slate-400'}">${r.balance.toLocaleString()}</td>
+                    <td class="p-3 text-center text-slate-600 text-[11px]">${r.condition||'-'}</td>
+                    <td class="p-3 text-center font-bold ${r.dueDateStr==='즉시결제'?'text-amber-600':'text-slate-800'}">${r.dueDateStr}</td>
+                    <td class="p-3 text-center text-[11px] ${r.isWarning?'text-rose-600 font-bold':(r.balance<=0?'text-emerald-600':'text-slate-600')}">${r.status}</td>
+                    <td class="p-3 text-slate-500 text-[11px] max-w-[200px] truncate" title="${r.memo}">${r.memo}</td>
+                </tr>`).join('');
+        }
+    </script>
+</body>
+</html>
