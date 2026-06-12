@@ -28,7 +28,7 @@
         <header class="mb-6 flex flex-col xl:flex-row xl:items-center xl:justify-between border-b border-slate-200 pb-5 gap-4">
             <div>
                 <div class="flex items-center gap-3">
-                    <span class="px-3 py-1 text-xs font-semibold bg-indigo-100 text-indigo-700 rounded-full">☁️ Google Sheets 클라우드 연동</span>
+                    <span class="px-3 py-1 text-xs font-semibold bg-indigo-100 text-indigo-700 rounded-full">☁️ Google Sheets 읽기 연동</span>
                     <span id="sync-status" class="text-[11px] font-bold text-slate-400">대기 중...</span>
                     <span id="update-badge" class="text-xs text-rose-500 font-bold">v8.0 Cloud</span>
                 </div>
@@ -466,9 +466,12 @@
             showToast('날짜 기준이 변경되었습니다.', 'info');
         }
 
-        /* ================= Google Sheets 연동 ================= */
-        const GAS_URL = 'https://script.google.com/macros/s/AKfycbxLLCniRMuwr5vEp73VMyO98YwjGOmaKyyGe9GL0onMnRM7D_mcKrUpEvl-C4ctRvDBZg/exec';
-        let isSyncing = false;
+        /* ================= Google Sheets 공개 CSV 연동 ================= */
+        const SHEET_ID = '1hlvBm8nB2qMCoRk_l_ir3Qx_k7DmE06slAJLzWN2a-w';
+        // 각 탭의 gid (시트 하단 탭 URL에서 확인)
+        // 기본값: sales=0, 나머지는 로드 시 자동 탐색
+        const TAB_NAMES = { sales: 'sales', ar: 'ar', success: 'success', fail: 'fail' };
+        let sheetGids = {}; // 탭명 → gid 캐시
 
         function showSyncStatus(msg, type='info') {
             const el = document.getElementById('sync-status');
@@ -478,75 +481,41 @@
             el.className = `text-[11px] font-bold ${colors[type]||colors.info}`;
         }
 
-        async function jsonpFetch(url) {
-            return new Promise((resolve, reject) => {
-                const cbName = 'cb_' + Date.now() + '_' + Math.floor(Math.random()*10000);
-                const script = document.createElement('script');
-                const timer = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('JSONP timeout'));
-                }, 15000);
-                function cleanup() {
-                    clearTimeout(timer);
-                    delete window[cbName];
-                    if (script.parentNode) script.parentNode.removeChild(script);
-                }
-                window[cbName] = function(data) { cleanup(); resolve(data); };
-                script.onerror = function() { cleanup(); reject(new Error('JSONP script error')); };
-                script.src = url + '&callback=' + cbName;
-                document.head.appendChild(script);
-            });
-        }
-
-        async function sheetsRead(tab) {
-            const data = await jsonpFetch(`${GAS_URL}?action=read&tab=${tab}`);
-            if (!data.ok) throw new Error(data.error);
-            return data.data || [];
-        }
-
-        async function sheetsWrite(tab, rows) {
-            const CHUNK = 50;
-            if (rows.length === 0) {
-                await jsonpFetch(`${GAS_URL}?action=clear&tab=${tab}`);
-                return;
-            }
-            const chunks = [];
-            for (let i = 0; i < rows.length; i += CHUNK) chunks.push(rows.slice(i, i + CHUNK));
-            for (let i = 0; i < chunks.length; i++) {
-                const url = `${GAS_URL}?action=write&tab=${tab}&index=${i}&chunk=${encodeURIComponent(JSON.stringify(chunks[i]))}`;
-                await jsonpFetch(url);
-            }
-        }
-
-        async function saveToCloud() {
-            if (isSyncing) return;
-            isSyncing = true;
-            showSyncStatus('☁️ 저장 중...', 'loading');
+        // Sheets JSON API로 탭 gid 자동 조회
+        async function fetchSheetGids() {
             try {
-                // 날짜 설정은 로컬스토리지에만 저장 (단순 설정값)
-                localStorage.setItem('dashboard_base_date', BASE_DATE_STR);
-                localStorage.setItem('dashboard_check_date', CHECK_DATE_STR);
-                // 데이터는 Sheets에 저장
-                await Promise.all([
-                    sheetsWrite('sales', allQuotes),
-                    sheetsWrite('ar', allArData),
-                    sheetsWrite('success', (allResultData||[]).filter(r=>r.kind==='success')),
-                    sheetsWrite('fail', (allResultData||[]).filter(r=>r.kind==='fail'))
-                ]);
-                showSyncStatus('✅ 저장됨 ' + new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}), 'success');
-            } catch(e) {
-                console.error('Cloud save error:', e);
-                showSyncStatus('⚠️ 저장 실패 (로컬 백업됨)', 'error');
-                // 실패 시 로컬스토리지에 백업
-                localStorage.setItem('sales_quote_all_quotes', JSON.stringify(allQuotes));
-                localStorage.setItem('dashboard_ar_data', JSON.stringify(allArData));
-                localStorage.setItem('dashboard_result_data', JSON.stringify(allResultData));
-            }
-            isSyncing = false;
+                const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=sales`;
+                // gid 수동 설정 방식 사용 (자동 조회 대신)
+            } catch(e) {}
         }
 
-        // 기존 saveToLocalStorage 호출부 호환용 (내부적으로 클라우드 저장)
-        function saveToLocalStorage() { saveToCloud(); }
+        // 공개 CSV URL로 데이터 읽기
+        async function readSheetCSV(tabName) {
+            // gviz/tq API 사용 - CORS 없이 JSON 반환
+            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const text = await res.text();
+            return parseCSVText(text);
+        }
+
+        function parseCSVText(text) {
+            const lines = text.trim().split('\n').filter(l => l.trim());
+            if (lines.length < 2) return [];
+            // PapaParse로 파싱
+            const result = Papa.parse(text, { header: true, skipEmptyLines: true });
+            return result.data || [];
+        }
+
+        // 저장은 로컬스토리지 유지 (쓰기는 Sheets에서 직접)
+        function saveToLocalStorage() {
+            localStorage.setItem('dashboard_base_date', BASE_DATE_STR);
+            localStorage.setItem('dashboard_check_date', CHECK_DATE_STR);
+            localStorage.setItem('sales_quote_all_quotes', JSON.stringify(allQuotes));
+            localStorage.setItem('dashboard_ar_data', JSON.stringify(allArData));
+            localStorage.setItem('dashboard_result_data', JSON.stringify(allResultData));
+            showSyncStatus('💾 로컬 저장됨', 'info');
+        }
 
         async function loadSavedData() {
             const sBase = localStorage.getItem('dashboard_base_date');
@@ -554,39 +523,107 @@
             if(sBase) { BASE_DATE_STR = sBase; BASE_DATE = new Date(sBase); document.getElementById('base-date-picker').value = sBase; }
             if(sCheck) { CHECK_DATE_STR = sCheck; CHECK_DATE = new Date(sCheck); document.getElementById('check-date-picker').value = sCheck; }
 
-            showSyncStatus('☁️ 데이터 불러오는 중...', 'loading');
+            showSyncStatus('☁️ Sheets에서 불러오는 중...', 'loading');
             try {
                 const [salesRows, arRows, successRows, failRows] = await Promise.all([
-                    sheetsRead('sales'),
-                    sheetsRead('ar'),
-                    sheetsRead('success'),
-                    sheetsRead('fail')
+                    readSheetCSV('sales'),
+                    readSheetCSV('ar'),
+                    readSheetCSV('success'),
+                    readSheetCSV('fail')
                 ]);
+
+                // sales 파싱 (기존 processRows 로직과 동일하게)
                 if (salesRows.length) {
-                    allQuotes = salesRows.map(r => ({
-                        ...r,
-                        id: r.id ? Number(r.id) : Date.now()+Math.random(),
-                        amount: r.amount ? Number(r.amount) : 0
-                    }));
+                    allQuotes = salesRows.filter(r => r['거래처명'] && r['거래처명'] !== '거래처명').map((r, idx) => {
+                        const rawDate = r['일자-No.'] || '';
+                        const datePart = String(rawDate).trim().split(' ')[0].replace(/\//g,'-');
+                        let rawInflow = r['유입경로'] || '';
+                        let inflow = '기타/오프라인';
+                        const ct = rawInflow.toLowerCase();
+                        if(ct.includes('유튜브')||ct.includes('youtube')) inflow='유튜브';
+                        else if(ct.includes('당근')) inflow='당근';
+                        else if(ct.includes('블로그')||ct.includes('blog')) inflow='블로그';
+                        else if(ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
+                        else if(rawInflow.trim()) inflow=rawInflow.trim();
+                        const region = r['지역'] || '-';
+                        const regionShort = region.replace(/특별시|광역시|특별자치시|특별자치도/g,'').split(' ')[0] || region;
+                        const custType = r['구분'] ? (r['구분'].includes('법인') ? '법인' : '개인') : '법인';
+                        const source = r['구분'] ? (r['구분'].includes('단기') ? '단기' : '장기') : '단기';
+                        return {
+                            id: Date.now()+idx+Math.random(),
+                            date: datePart,
+                            quoteNo: r['일자-No.'] || '',
+                            company: r['거래처명'] || '-',
+                            phone: r['고객연락처'] || '-',
+                            author: r['작성자'] || '-',
+                            region: regionShort,
+                            inflow: inflow,
+                            items: r['품목명(요약)'] || '-',
+                            amount: parseAmount(r['금액합계(VAT포함)'] || '0'),
+                            status: r['진행상태'] || '-',
+                            dueDate: (r['수주예상일']||'-').trim().replace(/\//g,'-'),
+                            history: r['견적결과(보고)'] || '',
+                            customerType: custType,
+                            source: source
+                        };
+                    });
                     updateLabels();
                 }
+
+                // ar 파싱
                 if (arRows.length) {
-                    allArData = arRows.map(r => ({ ...r, balance: r.balance ? Number(r.balance) : 0 }));
+                    allArData = arRows.filter(r => r['거래처명']).map((r,idx) => ({
+                        id: Date.now()+idx+Math.random(),
+                        company: r['거래처명'] || '-',
+                        author: r['작성자'] || r['담당자'] || '-',
+                        customerType: r['고객유형'] || '법인',
+                        invoiceDate: r['전표일자'] || '-',
+                        dueDate: r['결제예정일'] || '-',
+                        condition: r['결제조건'] || '-',
+                        balance: parseAmount(r['잔액'] || r['미수금'] || '0'),
+                        memo: r['메모'] || r['비고'] || ''
+                    }));
                     updateArLabels();
                 }
+
+                // success/fail 파싱
+                const toResultRow = (r, kind, idx) => {
+                    const rawDate = r['일자-No.'] || '';
+                    const datePart = String(rawDate).trim().split(' ')[0].replace(/\//g,'-');
+                    let rawInflow = r['유입경로'] || '';
+                    let inflow = '기타/오프라인';
+                    const ct = rawInflow.toLowerCase();
+                    if(ct.includes('유튜브')||ct.includes('youtube')) inflow='유튜브';
+                    else if(ct.includes('당근')) inflow='당근';
+                    else if(ct.includes('블로그')||ct.includes('blog')) inflow='블로그';
+                    else if(ct.includes('인터넷')||ct.includes('홈페이지')||ct.includes('쇼핑몰')||ct.includes('검색')||ct.includes('웹')) inflow='인터넷';
+                    else if(rawInflow.trim()) inflow=rawInflow.trim();
+                    return {
+                        id: Date.now()+idx+Math.random(),
+                        kind: kind,
+                        date: datePart,
+                        company: r['거래처명'] || '-',
+                        inflow: inflow,
+                        phone: r['고객연락처'] || '-',
+                        author: r['작성자'] || '-',
+                        items: r['품목명(요약)'] || '-',
+                        amount: parseAmount(r['금액합계(VAT포함)'] || '0'),
+                        result: r['견적결과(보고)'] || '-'
+                    };
+                };
                 const resultRows = [
-                    ...successRows.map(r => ({ ...r, kind:'success', amount: r.amount ? Number(r.amount) : 0 })),
-                    ...failRows.map(r => ({ ...r, kind:'fail', amount: r.amount ? Number(r.amount) : 0 }))
+                    ...successRows.filter(r=>r['거래처명']).map((r,i) => toResultRow(r,'success',i)),
+                    ...failRows.filter(r=>r['거래처명']).map((r,i) => toResultRow(r,'fail',i+10000))
                 ];
                 if (resultRows.length) {
                     allResultData = resultRows;
                     updateResultLabels('success'); updateResultLabels('fail');
                 }
-                showSyncStatus('✅ 최신 데이터 로드됨', 'success');
+
+                showSyncStatus('✅ Sheets 데이터 로드됨 ' + new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}), 'success');
             } catch(e) {
-                console.error('Cloud load error:', e);
-                showSyncStatus('⚠️ 네트워크 오류 — 로컬 데이터 사용 중', 'error');
-                // 클라우드 실패 시 로컬스토리지 폴백
+                console.error('Sheets load error:', e);
+                showSyncStatus('⚠️ Sheets 로드 실패 — 로컬 데이터 사용', 'error');
                 const sSales = localStorage.getItem('sales_quote_all_quotes'); if(sSales) { allQuotes = JSON.parse(sSales); updateLabels(); }
                 const sAr = localStorage.getItem('dashboard_ar_data'); if(sAr) { allArData = JSON.parse(sAr); updateArLabels(); }
                 const sResult = localStorage.getItem('dashboard_result_data'); if(sResult) { allResultData = JSON.parse(sResult); updateResultLabels('success'); updateResultLabels('fail'); }
@@ -594,19 +631,10 @@
             applyFiltersAndRender(); renderArTable(); renderResultTable();
         }
 
-        window.clearAllData = async function() {
-            if(confirm("모든 데이터를 영구 삭제하시겠습니까?\n(Google Sheets 데이터도 함께 삭제됩니다)")) {
-                showSyncStatus('🗑️ 삭제 중...', 'loading');
+        window.clearAllData = function() {
+            if(confirm("모든 로컬 데이터를 초기화하시겠습니까?\n(Google Sheets 데이터는 유지됩니다)")) {
                 allQuotes=[]; allArData=[]; allResultData=[];
                 localStorage.clear();
-                try {
-                    await Promise.all([
-                        sheetsWrite('sales', []),
-                        sheetsWrite('ar', []),
-                        sheetsWrite('success', []),
-                        sheetsWrite('fail', [])
-                    ]);
-                } catch(e) { console.error(e); }
                 location.reload();
             }
         }
